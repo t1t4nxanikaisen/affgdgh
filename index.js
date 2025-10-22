@@ -560,6 +560,226 @@ function detectServerType(url) {
   return 'Direct';
 }
 
+// ==================== PROFESSIONAL ERROR SCREEN ====================
+function sendErrorScreen(res, title, episode, errorMessage, anilistId = null) {
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${title} - Episode ${episode} | Not Found</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body, html {
+            overflow: hidden;
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%);
+            width: 100vw;
+            height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+        }
+        
+        .error-container {
+            text-align: center;
+            padding: 3rem;
+            max-width: 600px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            backdrop-filter: blur(15px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+        }
+        
+        .error-icon {
+            font-size: 5rem;
+            margin-bottom: 2rem;
+            animation: float 3s ease-in-out infinite;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+        
+        .error-title {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            background: linear-gradient(45deg, #ff6b6b, #ff8e8e, #ff6b6b);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-weight: bold;
+        }
+        
+        .anime-info {
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+            color: #4ecdc4;
+            font-weight: 600;
+        }
+        
+        .error-message {
+            font-size: 1.1rem;
+            margin-bottom: 2rem;
+            color: #e0e0e0;
+            line-height: 1.6;
+            opacity: 0.9;
+        }
+        
+        .suggestions {
+            background: rgba(255, 255, 255, 0.08);
+            padding: 1.5rem;
+            border-radius: 12px;
+            margin-bottom: 2rem;
+            text-align: left;
+        }
+        
+        .suggestions h3 {
+            color: #4ecdc4;
+            margin-bottom: 1rem;
+            font-size: 1.2rem;
+        }
+        
+        .suggestions ul {
+            list-style: none;
+            padding-left: 1rem;
+        }
+        
+        .suggestions li {
+            margin-bottom: 0.5rem;
+            color: #b0b0b0;
+            position: relative;
+            padding-left: 1.5rem;
+        }
+        
+        .suggestions li:before {
+            content: '•';
+            color: #ff6b6b;
+            position: absolute;
+            left: 0;
+            font-size: 1.2rem;
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 25px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(45deg, #4ecdc4, #45b7d1);
+            color: white;
+        }
+        
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+        }
+        
+        .technical-info {
+            margin-top: 2rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 0.9rem;
+            color: #888;
+        }
+        
+        @media (max-width: 768px) {
+            .error-container {
+                margin: 1rem;
+                padding: 2rem;
+            }
+            
+            .error-title {
+                font-size: 2rem;
+            }
+            
+            .anime-info {
+                font-size: 1.2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="error-container">
+        <div class="error-icon">🎭</div>
+        <h1 class="error-title">Anime Not Found</h1>
+        <div class="anime-info">"${title}" - Episode ${episode}</div>
+        
+        <div class="error-message">
+            ${errorMessage || 'The requested anime episode could not be found on any of our streaming sources.'}
+        </div>
+        
+        <div class="suggestions">
+            <h3>💡 Suggestions:</h3>
+            <ul>
+                <li>Check if the anime title is spelled correctly</li>
+                <li>Try a different episode number</li>
+                <li>The anime might not be available in your region</li>
+                <li>Try again later as sources get updated regularly</li>
+                ${anilistId ? `<li>AniList ID: ${anilistId}</li>` : ''}
+            </ul>
+        </div>
+        
+        <div class="action-buttons">
+            <a href="/" class="btn btn-primary">🏠 Go Home</a>
+            <a href="/health" class="btn btn-secondary">📊 Check Status</a>
+            <button onclick="history.back()" class="btn btn-secondary">↩️ Go Back</button>
+        </div>
+        
+        <div class="technical-info">
+            🔧 Professional Anime Streaming API • If this persists, contact support
+        </div>
+    </div>
+
+    <script>
+        // Add some interactive effects
+        document.addEventListener('DOMContentLoaded', function() {
+            const buttons = document.querySelectorAll('.btn');
+            buttons.forEach(btn => {
+                btn.addEventListener('mouseenter', function() {
+                    this.style.transform = 'translateY(-2px)';
+                });
+                btn.addEventListener('mouseleave', function() {
+                    this.style.transform = 'translateY(0)';
+                });
+            });
+        });
+    </script>
+</body>
+</html>`;
+  
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+}
+
 // ==================== PROFESSIONAL LOADING SCREEN WITH PROGRESS ====================
 function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], actualSeason = 1, mappingType = 'exact', calculation = '') {
   let mappingMessage = '';
@@ -1062,7 +1282,7 @@ function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], actualS
             
             // Mark current step as active
             if (stepNumber <= totalSteps) {
-                const step = document.getElementById('step' + i);
+                const step = document.getElementById('step' + stepNumber);
                 step.classList.add('active');
             }
         }
@@ -1201,15 +1421,21 @@ app.get('/api/anime/:anilistId/:episode', async (req, res) => {
     if (!episodeData) {
       apiStats.failedRequests++;
       const responseTime = Date.now() - startTime;
-      return res.status(404).json({ 
-        error: 'No anime found on any source',
-        anime_title: titleData.primary,
-        anilist_id: anilistId,
-        episode: parseInt(episode),
-        response_time: `${responseTime}ms`,
-        sources_tried: SOURCES.map(s => s.name),
-        suggestion: 'Episode might not be available yet'
-      });
+      
+      if (json) {
+        return res.status(404).json({ 
+          error: 'No anime found on any source',
+          anime_title: titleData.primary,
+          anilist_id: anilistId,
+          episode: parseInt(episode),
+          response_time: `${responseTime}ms`,
+          sources_tried: SOURCES.map(s => s.name),
+          suggestion: 'Episode might not be available yet'
+        });
+      }
+      
+      return sendErrorScreen(res, titleData.primary, episode, 
+                           `Episode ${episode} not found across multiple seasons.`, anilistId);
     }
 
     apiStats.successfulRequests++;
@@ -1245,11 +1471,25 @@ app.get('/api/anime/:anilistId/:episode', async (req, res) => {
     const responseTime = Date.now() - startTime;
     console.error('💥 AniList endpoint error:', error.message);
     apiStats.failedRequests++;
-    res.status(500).json({ 
-      error: error.message,
-      response_time: `${responseTime}ms`,
-      suggestion: 'Try different AniList ID or check episode availability'
-    });
+    
+    if (req.query.json) {
+      return res.status(500).json({ 
+        error: error.message,
+        response_time: `${responseTime}ms`,
+        suggestion: 'Try different AniList ID or check episode availability'
+      });
+    }
+    
+    // Get title for error screen
+    let title = 'Unknown Anime';
+    try {
+      const titleData = await getAnimeTitleFromAniList(req.params.anilistId);
+      title = titleData.primary;
+    } catch (e) {
+      title = `AniList ID: ${req.params.anilistId}`;
+    }
+    
+    return sendErrorScreen(res, title, req.params.episode, error.message, req.params.anilistId);
   }
 });
 
@@ -1269,14 +1509,20 @@ app.get('/api/stream/:name/:episode', async (req, res) => {
     if (!episodeData) {
       apiStats.failedRequests++;
       const responseTime = Date.now() - startTime;
-      return res.status(404).json({ 
-        error: 'No streaming sources found',
-        searched_name: name,
-        episode: parseInt(episode),
-        response_time: `${responseTime}ms`,
-        sources_tried: SOURCES.map(s => s.name),
-        suggestion: 'Try alternative titles or check if anime exists on sources'
-      });
+      
+      if (json) {
+        return res.status(404).json({ 
+          error: 'No streaming sources found',
+          searched_name: name,
+          episode: parseInt(episode),
+          response_time: `${responseTime}ms`,
+          sources_tried: SOURCES.map(s => s.name),
+          suggestion: 'Try alternative titles or check if anime exists on sources'
+        });
+      }
+      
+      return sendErrorScreen(res, name, episode, 
+                           `"${name}" - Episode ${episode} not found on any streaming sources.`);
     }
 
     apiStats.successfulRequests++;
@@ -1310,12 +1556,17 @@ app.get('/api/stream/:name/:episode', async (req, res) => {
     const responseTime = Date.now() - startTime;
     console.error('💥 Stream error:', error.message);
     apiStats.failedRequests++;
-    res.status(500).json({ 
-      error: error.message,
-      response_time: `${responseTime}ms`,
-      searched_name: req.params.name,
-      episode: parseInt(req.params.episode)
-    });
+    
+    if (req.query.json) {
+      return res.status(500).json({ 
+        error: error.message,
+        response_time: `${responseTime}ms`,
+        searched_name: req.params.name,
+        episode: parseInt(req.params.episode)
+      });
+    }
+    
+    return sendErrorScreen(res, req.params.name, req.params.episode, error.message);
   }
 });
 
@@ -1338,39 +1589,39 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'active', 
     version: '5.0.0',
-    performance: 'SMART SEASON DETECTION',
+    performance: 'PROFESSIONAL ERROR HANDLING',
     total_requests: apiStats.totalRequests,
     successful_requests: apiStats.successfulRequests,
     failed_requests: apiStats.failedRequests,
     anilist_requests: apiStats.anilistRequests,
     success_rate: successRate + '%',
     sources: SOURCES.map(s => s.name),
-    strategy: 'Smart season detection with auto-calculation',
+    strategy: 'Professional error UI with suggestions',
     features: [
-      'Auto-detects episode boundaries',
-      'Calculates exact episode numbers',
-      'Tries multiple season mappings',
-      'Shows calculation in player'
+      'Professional error screen with gradient design',
+      'Interactive suggestions for users',
+      'Beautiful loading animations',
+      'Auto-redirect and action buttons'
     ]
   });
 });
 
 app.get('/', (req, res) => res.json({ 
-  message: '⚡ SMART ANIME STREAMING API',
+  message: '⚡ PROFESSIONAL ANIME STREAMING API',
   version: '5.0.0',
-  performance: 'Smart season detection',
+  performance: 'Professional error handling',
   sources: ['satoru.one', 'watchanimeworld.in', 'animeworld-india.me'],
-  strategy: 'Smart multi-season mapping • Auto-calculation',
+  strategy: 'Smart multi-season mapping • Professional UI/UX',
   endpoints: {
-    '/api/anime/:anilistId/:episode': 'AniList streaming (smart detection)',
-    '/api/stream/:name/:episode': 'Name-based streaming (smart detection)',
+    '/api/anime/:anilistId/:episode': 'AniList streaming (professional UI)',
+    '/api/stream/:name/:episode': 'Name-based streaming (professional UI)',
     '/health': 'API status with performance metrics'
   },
-  test_urls: [
-    '/api/anime/113415/23', // JJK Episode 23
-    '/api/anime/113415/25', // JJK should map to Season 2 Episode 1
-    '/api/anime/113415/30', // JJK should map to Season 2 Episode 6
-    '/api/stream/one piece/1000'
+  features: [
+    'Professional loading screen with progress',
+    'Beautiful error screen with suggestions',
+    'Smart season detection',
+    'Auto-calculation for episode mapping'
   ]
 }));
 
@@ -1378,34 +1629,31 @@ app.get('/', (req, res) => res.json({
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`
-⚡ SMART ANIME API v5.0 - AUTO-SEASON DETECTION
+⚡ PROFESSIONAL ANIME API v5.0 - ERROR HANDLING
 ───────────────────────────────────────────
 Port: ${PORT}
 API: http://localhost:${PORT}
 
-🎯 SMART DETECTION:
-• Auto-detects episode boundaries (12,13,24,25,26)
-• Calculates exact episode numbers for next seasons
-• Tries multiple mapping strategies
-• Shows calculation in player
+🎨 PROFESSIONAL UI:
+• Beautiful error screens with gradient design
+• Professional loading animations  
+• Interactive suggestions for users
+• Action buttons and navigation
 
-🔍 SEARCH STRATEGY:
-1. Try exact episode in seasons 1-3
-2. Intelligent boundary detection
-3. Progressive calculation
-4. Fallback to episode 1
+🚀 ERROR FEATURES:
+• Gradient background error screens
+• Animated error icons
+• Helpful suggestions list
+• Action buttons (Home, Status, Back)
+• Technical information display
 
-📊 MAPPING EXAMPLES:
-• Episode 30 → Season 2 Episode 6 (30-24=6)
-• Episode 50 → Season 3 Episode 2 (50-48=2)
-• Episode 40 → Season 2 Episode 16 (40-24=16)
+🔧 LOADING FEATURES:
+• Triple spinner animation
+• Progress bar with shine effect
+• Step-by-step loading indicators
+• Professional typography
 
-🚀 TEST WITH:
-• /api/anime/113415/23 - JJK S1E23
-• /api/anime/113415/25 - JJK S2E1 
-• /api/anime/113415/30 - JJK S2E6
-
-✅ READY: Smart season detection active
+✅ READY: Professional error handling active
 ───────────────────────────────────────────
   `);
 });

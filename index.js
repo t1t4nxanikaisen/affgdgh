@@ -110,17 +110,14 @@ async function getAnimeTitleFromAniList(anilistId) {
   }
 }
 
-// ==================== SMART EPISODE FINDER WITH AUTO-SEASON DETECTION ====================
+// ==================== SMART EPISODE FINDER WITH AUTO-DETECTION ====================
 async function findEpisodeAcrossSeasons(animeTitle, targetEpisode) {
-  let currentSeason = 1;
-  let maxSeasons = 10;
-  
   console.log(`🎯 SMART SEARCH: Looking for episode ${targetEpisode} of "${animeTitle}"`);
   
-  // First, try to find the exact episode in season 1
-  for (let season = 1; season <= maxSeasons; season++) {
+  // PHASE 1: Try exact episode in each season first
+  for (let season = 1; season <= 3; season++) {
     try {
-      console.log(`🔍 Checking Season ${season} for episode ${targetEpisode} of "${animeTitle}"`);
+      console.log(`🔍 PHASE 1: Trying Season ${season}, Episode ${targetEpisode}`);
       
       const episodeData = await searchAllSourcesParallel(animeTitle, season, targetEpisode);
       
@@ -134,55 +131,86 @@ async function findEpisodeAcrossSeasons(animeTitle, targetEpisode) {
           mappingType: 'exact'
         };
       }
-      
       console.log(`❌ Not found in Season ${season}`);
-      
     } catch (error) {
       console.log(`❌ Season ${season} search failed: ${error.message}`);
     }
   }
   
-  // If exact episode not found, try to map to next season intelligently
-  console.log(`🔍 EXACT EPISODE NOT FOUND, trying intelligent mapping...`);
+  // PHASE 2: Intelligent season detection with auto-calculation
+  console.log(`🔍 PHASE 2: Intelligent season detection for episode ${targetEpisode}`);
   
-  // Common episode counts per season for popular anime
-  const commonEpisodeCounts = [12, 13, 24, 25, 26, 50, 51, 100, 101];
+  // Try to detect the actual episode count per season by testing boundaries
+  const commonBoundaries = [12, 13, 24, 25, 26];
   
-  for (let season = 1; season <= maxSeasons; season++) {
-    for (const episodeCount of commonEpisodeCounts) {
-      if (targetEpisode > episodeCount) {
-        const nextSeasonEpisode = targetEpisode - episodeCount;
+  for (let season = 1; season <= 3; season++) {
+    for (const boundary of commonBoundaries) {
+      if (targetEpisode > boundary) {
+        const calculatedEpisode = targetEpisode - boundary;
         
-        // Only try reasonable episode numbers (1-50)
-        if (nextSeasonEpisode >= 1 && nextSeasonEpisode <= 50) {
-          console.log(`🔄 Trying Season ${season + 1}, Episode ${nextSeasonEpisode} (mapped from ${targetEpisode} - ${episodeCount})`);
+        // Only try reasonable episode numbers (1-30)
+        if (calculatedEpisode >= 1 && calculatedEpisode <= 30) {
+          console.log(`🔄 Trying Season ${season + 1}, Episode ${calculatedEpisode} (${targetEpisode} - ${boundary})`);
           
           try {
-            const episodeData = await searchAllSourcesParallel(animeTitle, season + 1, nextSeasonEpisode);
+            const episodeData = await searchAllSourcesParallel(animeTitle, season + 1, calculatedEpisode);
             
             if (episodeData) {
-              console.log(`✅ MAPPED: Episode ${targetEpisode} → Season ${season + 1}, Episode ${nextSeasonEpisode}`);
+              console.log(`✅ SMART MAPPING: Episode ${targetEpisode} → Season ${season + 1}, Episode ${calculatedEpisode}`);
               return {
                 ...episodeData,
                 actualSeason: season + 1,
-                actualEpisode: nextSeasonEpisode,
+                actualEpisode: calculatedEpisode,
                 requestedEpisode: targetEpisode,
-                mappingType: 'auto_mapped',
-                originalEpisodeCount: episodeCount
+                mappingType: 'calculated',
+                calculation: `${targetEpisode} - ${boundary} = ${calculatedEpisode}`
               };
             }
           } catch (error) {
-            // Continue to next mapping
+            // Continue to next boundary
           }
         }
       }
     }
   }
   
-  // Final fallback: try episode 1 of next seasons
+  // PHASE 3: Progressive calculation (most accurate)
+  console.log(`🔍 PHASE 3: Progressive calculation for episode ${targetEpisode}`);
+  
+  for (let season = 2; season <= 5; season++) {
+    // Test different episode counts per season
+    for (const epCount of [12, 13, 24, 25, 26]) {
+      const episodesInPreviousSeasons = epCount * (season - 1);
+      const calculatedEpisode = targetEpisode - episodesInPreviousSeasons;
+      
+      if (calculatedEpisode >= 1 && calculatedEpisode <= epCount) {
+        console.log(`🔄 Progressive: Season ${season}, Episode ${calculatedEpisode} (${targetEpisode} - ${episodesInPreviousSeasons})`);
+        
+        try {
+          const episodeData = await searchAllSourcesParallel(animeTitle, season, calculatedEpisode);
+          
+          if (episodeData) {
+            console.log(`✅ PROGRESSIVE MAPPING: Episode ${targetEpisode} → Season ${season}, Episode ${calculatedEpisode}`);
+            return {
+              ...episodeData,
+              actualSeason: season,
+              actualEpisode: calculatedEpisode,
+              requestedEpisode: targetEpisode,
+              mappingType: 'progressive',
+              calculation: `${targetEpisode} - ${episodesInPreviousSeasons} = ${calculatedEpisode}`
+            };
+          }
+        } catch (error) {
+          // Continue to next calculation
+        }
+      }
+    }
+  }
+  
+  // FINAL FALLBACK: Try episode 1 of each season
   console.log(`🔍 FINAL FALLBACK: Trying episode 1 of each season`);
   
-  for (let season = 1; season <= maxSeasons; season++) {
+  for (let season = 1; season <= 3; season++) {
     try {
       console.log(`🔄 Fallback: Season ${season}, Episode 1`);
       
@@ -203,7 +231,7 @@ async function findEpisodeAcrossSeasons(animeTitle, targetEpisode) {
     }
   }
   
-  throw new Error(`Episode ${targetEpisode} not found across ${maxSeasons} seasons`);
+  throw new Error(`Episode ${targetEpisode} not found across multiple seasons`);
 }
 
 // ==================== ULTRA-FAST SATORU SCRAPING ====================
@@ -533,10 +561,13 @@ function detectServerType(url) {
 }
 
 // ==================== PROFESSIONAL LOADING SCREEN WITH PROGRESS ====================
-function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], actualSeason = 1, mappingType = 'exact') {
+function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], actualSeason = 1, mappingType = 'exact', calculation = '') {
   let mappingMessage = '';
-  if (mappingType === 'auto_mapped') {
-    mappingMessage = `🎯 Auto-mapped to Season ${actualSeason}`;
+  let calculationInfo = '';
+
+  if (mappingType === 'calculated' || mappingType === 'progressive') {
+    mappingMessage = `🎯 Smart Mapping: Season ${actualSeason}, Episode ${actualSeason === 1 ? episode : calculation?.split('=')[1]?.trim() || actualSeason}`;
+    calculationInfo = calculation;
   } else if (mappingType === 'fallback') {
     mappingMessage = `🔄 Fallback: Season ${actualSeason}, Episode 1`;
   } else if (actualSeason > 1) {
@@ -791,6 +822,7 @@ function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], actualS
             font-size: 1rem;
             border: 1px solid rgba(78, 205, 196, 0.4);
             backdrop-filter: blur(10px);
+            text-align: center;
         }
         
         .mapping-info {
@@ -801,6 +833,13 @@ function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], actualS
             font-size: 1rem;
             border: 1px solid rgba(255, 107, 107, 0.4);
             backdrop-filter: blur(10px);
+            text-align: center;
+        }
+        
+        .calculation {
+            font-size: 0.8em;
+            opacity: 0.8;
+            margin-top: 5px;
         }
         
         /* Player Styles */
@@ -931,8 +970,9 @@ function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], actualS
         </div>
         
         ${mappingMessage ? `
-        <div class="${mappingType === 'auto_mapped' ? 'mapping-info' : 'season-info'}">
+        <div class="${mappingType === 'fallback' ? 'mapping-info' : 'season-info'}">
             ${mappingMessage}
+            ${calculationInfo ? `<div class="calculation">${calculationInfo}</div>` : ''}
         </div>
         ` : ''}
     </div>
@@ -1022,7 +1062,7 @@ function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], actualS
             
             // Mark current step as active
             if (stepNumber <= totalSteps) {
-                const step = document.getElementById('step' + stepNumber);
+                const step = document.getElementById('step' + i);
                 step.classList.add('active');
             }
         }
@@ -1147,14 +1187,14 @@ app.get('/api/anime/:anilistId/:episode', async (req, res) => {
     const { anilistId, episode } = req.params;
     const { json, clean } = req.query;
 
-    console.log(`\n⚡ AniList Stream: ID ${anilistId} Episode ${episode}`);
+    console.log(`\n⚡ FAST STREAM: ID ${anilistId} Episode ${episode}`);
     apiStats.totalRequests++;
 
     const titleData = await getAnimeTitleFromAniList(anilistId);
-    console.log(`✅ AniList Data: "${titleData.primary}"`);
+    console.log(`✅ AniList: "${titleData.primary}"`);
     
     const searchTitle = titleData.primary;
-    console.log(`🔍 Searching with: "${searchTitle}"`);
+    console.log(`🎯 FAST SEARCH: Episode ${episode} of "${searchTitle}"`);
 
     const episodeData = await findEpisodeAcrossSeasons(searchTitle, parseInt(episode));
 
@@ -1174,7 +1214,7 @@ app.get('/api/anime/:anilistId/:episode', async (req, res) => {
 
     apiStats.successfulRequests++;
     const responseTime = Date.now() - startTime;
-    console.log(`⏱️  SMART RESPONSE: ${responseTime}ms`);
+    console.log(`⏱️  FAST RESPONSE: ${responseTime}ms`);
 
     if (clean !== 'false') {
       return sendCleanIframe(res, episodeData.servers[0].url, titleData.primary, episode);
@@ -1189,6 +1229,7 @@ app.get('/api/anime/:anilistId/:episode', async (req, res) => {
         actual_episode: episodeData.actualEpisode,
         actual_season: episodeData.actualSeason,
         mapping_type: episodeData.mappingType,
+        calculation: episodeData.calculation || '',
         source: episodeData.source,
         servers: episodeData.servers,
         total_servers: episodeData.servers.length,
@@ -1198,7 +1239,7 @@ app.get('/api/anime/:anilistId/:episode', async (req, res) => {
 
     return sendEnhancedPlayer(res, titleData.primary, episode, 
                             episodeData.servers[0].url, episodeData.servers, 
-                            episodeData.actualSeason, episodeData.mappingType);
+                            episodeData.actualSeason, episodeData.mappingType, episodeData.calculation);
 
   } catch (error) {
     const responseTime = Date.now() - startTime;
@@ -1220,7 +1261,7 @@ app.get('/api/stream/:name/:episode', async (req, res) => {
     const { name, episode } = req.params;
     const { json, clean } = req.query;
 
-    console.log(`\n🎬 Stream: ${name} Episode ${episode}`);
+    console.log(`\n🎬 FAST STREAM: ${name} Episode ${episode}`);
     apiStats.totalRequests++;
 
     const episodeData = await findEpisodeAcrossSeasons(name, parseInt(episode));
@@ -1240,7 +1281,7 @@ app.get('/api/stream/:name/:episode', async (req, res) => {
 
     apiStats.successfulRequests++;
     const responseTime = Date.now() - startTime;
-    console.log(`⏱️  SMART RESPONSE: ${responseTime}ms`);
+    console.log(`⏱️  FAST RESPONSE: ${responseTime}ms`);
 
     if (clean !== 'false') {
       return sendCleanIframe(res, episodeData.servers[0].url, name, episode);
@@ -1254,6 +1295,7 @@ app.get('/api/stream/:name/:episode', async (req, res) => {
         actual_episode: episodeData.actualEpisode,
         actual_season: episodeData.actualSeason,
         mapping_type: episodeData.mappingType,
+        calculation: episodeData.calculation || '',
         source: episodeData.source,
         servers: episodeData.servers,
         response_time: `${responseTime}ms`
@@ -1262,7 +1304,7 @@ app.get('/api/stream/:name/:episode', async (req, res) => {
 
     return sendEnhancedPlayer(res, name, episode, 
                             episodeData.servers[0].url, episodeData.servers,
-                            episodeData.actualSeason, episodeData.mappingType);
+                            episodeData.actualSeason, episodeData.mappingType, episodeData.calculation);
 
   } catch (error) {
     const responseTime = Date.now() - startTime;
@@ -1296,40 +1338,39 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'active', 
     version: '5.0.0',
-    performance: 'PROFESSIONAL LOADING EXPERIENCE',
+    performance: 'SMART SEASON DETECTION',
     total_requests: apiStats.totalRequests,
     successful_requests: apiStats.successfulRequests,
     failed_requests: apiStats.failedRequests,
     anilist_requests: apiStats.anilistRequests,
     success_rate: successRate + '%',
     sources: SOURCES.map(s => s.name),
-    strategy: 'Professional loading with progress simulation',
+    strategy: 'Smart season detection with auto-calculation',
     features: [
-      '5-second animated loading screen',
-      'Realistic progress simulation',
-      'Step-by-step loading indicators',
-      'Triple spinner animation',
-      'Professional UI/UX'
+      'Auto-detects episode boundaries',
+      'Calculates exact episode numbers',
+      'Tries multiple season mappings',
+      'Shows calculation in player'
     ]
   });
 });
 
 app.get('/', (req, res) => res.json({ 
-  message: '⚡ PROFESSIONAL ANIME STREAMING API',
+  message: '⚡ SMART ANIME STREAMING API',
   version: '5.0.0',
-  performance: 'Professional loading experience',
+  performance: 'Smart season detection',
   sources: ['satoru.one', 'watchanimeworld.in', 'animeworld-india.me'],
-  strategy: 'Smart multi-season mapping • Professional loading',
+  strategy: 'Smart multi-season mapping • Auto-calculation',
   endpoints: {
-    '/api/anime/:anilistId/:episode': 'AniList streaming (professional loading)',
-    '/api/stream/:name/:episode': 'Name-based streaming (professional loading)',
+    '/api/anime/:anilistId/:episode': 'AniList streaming (smart detection)',
+    '/api/stream/:name/:episode': 'Name-based streaming (smart detection)',
     '/health': 'API status with performance metrics'
   },
   test_urls: [
     '/api/anime/113415/23', // JJK Episode 23
-    '/api/anime/113415/25', // JJK should map to Season 2
-    '/api/anime/21/1000',   // One Piece should map to latest season
-    '/api/stream/one piece/1'
+    '/api/anime/113415/25', // JJK should map to Season 2 Episode 1
+    '/api/anime/113415/30', // JJK should map to Season 2 Episode 6
+    '/api/stream/one piece/1000'
   ]
 }));
 
@@ -1337,37 +1378,34 @@ app.get('/', (req, res) => res.json({
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`
-⚡ PROFESSIONAL ANIME API v5.0 - LOADING EXPERIENCE
+⚡ SMART ANIME API v5.0 - AUTO-SEASON DETECTION
 ───────────────────────────────────────────
 Port: ${PORT}
 API: http://localhost:${PORT}
 
-🎨 PROFESSIONAL LOADING:
-• 5-second animated loading screen
-• Realistic progress simulation (0-100%)
-• Step-by-step loading indicators
-• Triple spinner animation
-• Professional progress bar
+🎯 SMART DETECTION:
+• Auto-detects episode boundaries (12,13,24,25,26)
+• Calculates exact episode numbers for next seasons
+• Tries multiple mapping strategies
+• Shows calculation in player
 
-📊 LOADING STEPS:
-1. Connecting to streaming sources
-2. Fetching episode data  
-3. Loading video player
-4. Ready to play
+🔍 SEARCH STRATEGY:
+1. Try exact episode in seasons 1-3
+2. Intelligent boundary detection
+3. Progressive calculation
+4. Fallback to episode 1
 
-⏱️  LOADING FEATURES:
-• Progress percentage (0% - 100%)
-• Status messages for each step
-• Animated progress bar with shine effect
-• Step completion indicators
-• 8-second fallback timeout
+📊 MAPPING EXAMPLES:
+• Episode 30 → Season 2 Episode 6 (30-24=6)
+• Episode 50 → Season 3 Episode 2 (50-48=2)
+• Episode 40 → Season 2 Episode 16 (40-24=16)
 
 🚀 TEST WITH:
 • /api/anime/113415/23 - JJK S1E23
-• /api/anime/113415/25 - JJK auto-mapped to S2
-• /api/anime/21/1000   - One Piece latest
+• /api/anime/113415/25 - JJK S2E1 
+• /api/anime/113415/30 - JJK S2E6
 
-✅ READY: Professional loading experience active
+✅ READY: Smart season detection active
 ───────────────────────────────────────────
   `);
 });

@@ -740,11 +740,8 @@ function sendErrorScreen(res, title, episode, errorMessage, anilistId = null) {
         <div class="suggestions">
             <h3>💡 Suggestions:</h3>
             <ul>
-                <li>Check if the anime title is spelled correctly</li>
                 <li>Try a different episode number</li>
-                <li>The anime might not be available in your region</li>
                 <li>Try again later as sources get updated regularly</li>
-                ${anilistId ? `<li>AniList ID: ${anilistId}</li>` : ''}
             </ul>
         </div>
         
@@ -755,7 +752,7 @@ function sendErrorScreen(res, title, episode, errorMessage, anilistId = null) {
         </div>
         
         <div class="technical-info">
-            🔧 Professional Anime Streaming API • If this persists, contact support
+             If this persists, contact support
         </div>
     </div>
 

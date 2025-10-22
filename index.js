@@ -82,7 +82,7 @@ async function getAnimeTitleFromAniList(anilistId) {
       query,
       variables: { id: parseInt(anilistId) }
     }, { 
-      timeout: 2000, // Ultra-fast timeout
+      timeout: 5000,
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json'
@@ -110,37 +110,129 @@ async function getAnimeTitleFromAniList(anilistId) {
   }
 }
 
+// ==================== SMART EPISODE FINDER WITH AUTO-SEASON DETECTION ====================
+async function findEpisodeAcrossSeasons(animeTitle, targetEpisode) {
+  let currentSeason = 1;
+  let maxSeasons = 10;
+  
+  console.log(`🎯 SMART SEARCH: Looking for episode ${targetEpisode} of "${animeTitle}"`);
+  
+  // First, try to find the exact episode in season 1
+  for (let season = 1; season <= maxSeasons; season++) {
+    try {
+      console.log(`🔍 Checking Season ${season} for episode ${targetEpisode} of "${animeTitle}"`);
+      
+      const episodeData = await searchAllSourcesParallel(animeTitle, season, targetEpisode);
+      
+      if (episodeData) {
+        console.log(`✅ FOUND: Season ${season}, Episode ${targetEpisode}`);
+        return {
+          ...episodeData,
+          actualSeason: season,
+          actualEpisode: targetEpisode,
+          requestedEpisode: targetEpisode,
+          mappingType: 'exact'
+        };
+      }
+      
+      console.log(`❌ Not found in Season ${season}`);
+      
+    } catch (error) {
+      console.log(`❌ Season ${season} search failed: ${error.message}`);
+    }
+  }
+  
+  // If exact episode not found, try to map to next season intelligently
+  console.log(`🔍 EXACT EPISODE NOT FOUND, trying intelligent mapping...`);
+  
+  // Common episode counts per season for popular anime
+  const commonEpisodeCounts = [12, 13, 24, 25, 26, 50, 51, 100, 101];
+  
+  for (let season = 1; season <= maxSeasons; season++) {
+    for (const episodeCount of commonEpisodeCounts) {
+      if (targetEpisode > episodeCount) {
+        const nextSeasonEpisode = targetEpisode - episodeCount;
+        
+        // Only try reasonable episode numbers (1-50)
+        if (nextSeasonEpisode >= 1 && nextSeasonEpisode <= 50) {
+          console.log(`🔄 Trying Season ${season + 1}, Episode ${nextSeasonEpisode} (mapped from ${targetEpisode} - ${episodeCount})`);
+          
+          try {
+            const episodeData = await searchAllSourcesParallel(animeTitle, season + 1, nextSeasonEpisode);
+            
+            if (episodeData) {
+              console.log(`✅ MAPPED: Episode ${targetEpisode} → Season ${season + 1}, Episode ${nextSeasonEpisode}`);
+              return {
+                ...episodeData,
+                actualSeason: season + 1,
+                actualEpisode: nextSeasonEpisode,
+                requestedEpisode: targetEpisode,
+                mappingType: 'auto_mapped',
+                originalEpisodeCount: episodeCount
+              };
+            }
+          } catch (error) {
+            // Continue to next mapping
+          }
+        }
+      }
+    }
+  }
+  
+  // Final fallback: try episode 1 of next seasons
+  console.log(`🔍 FINAL FALLBACK: Trying episode 1 of each season`);
+  
+  for (let season = 1; season <= maxSeasons; season++) {
+    try {
+      console.log(`🔄 Fallback: Season ${season}, Episode 1`);
+      
+      const episodeData = await searchAllSourcesParallel(animeTitle, season, 1);
+      
+      if (episodeData) {
+        console.log(`✅ FALLBACK FOUND: Season ${season}, Episode 1`);
+        return {
+          ...episodeData,
+          actualSeason: season,
+          actualEpisode: 1,
+          requestedEpisode: targetEpisode,
+          mappingType: 'fallback'
+        };
+      }
+    } catch (error) {
+      console.log(`❌ Fallback Season ${season} failed: ${error.message}`);
+    }
+  }
+  
+  throw new Error(`Episode ${targetEpisode} not found across ${maxSeasons} seasons`);
+}
+
 // ==================== ULTRA-FAST SATORU SCRAPING ====================
 async function findSatoruEpisode(animeTitle, episodeNum) {
   try {
     console.log(`🎯 Satoru: Searching for "${animeTitle}" episode ${episodeNum}`);
     
-    // Clean title for search
     const cleanTitle = animeTitle.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
     const searchUrl = `https://satoru.one/filter?keyword=${encodeURIComponent(cleanTitle)}`;
     
     const searchResponse = await axios.get(searchUrl, {
       headers: getHeaders('https://satoru.one'),
-      timeout: 3000 // Ultra-fast timeout
+      timeout: 8000
     });
 
     const $ = load(searchResponse.data);
     let animeId = null;
     let bestMatch = null;
     
-    // Find anime in search results - ULTRA-OPTIMIZED: only check first 3 results
-    $('.flw-item').slice(0, 3).each((i, el) => {
+    $('.flw-item').slice(0, 5).each((i, el) => {
       const name = $(el).find('.film-name a').text().trim();
       const dataId = $(el).find('.film-poster-ahref').attr('data-id');
       
       if (name && dataId) {
-        // Exact match gets highest priority
         if (name.toLowerCase() === cleanTitle.toLowerCase()) {
           animeId = dataId;
           bestMatch = name;
-          return false; // Break loop
+          return false;
         }
-        // Partial match
         if (name.toLowerCase().includes(cleanTitle.toLowerCase()) && !animeId) {
           animeId = dataId;
           bestMatch = name;
@@ -148,7 +240,6 @@ async function findSatoruEpisode(animeTitle, episodeNum) {
       }
     });
 
-    // Ultra-fast fallback to first result if no match found
     if (!animeId) {
       const firstItem = $('.flw-item').first();
       if (firstItem.length) {
@@ -160,11 +251,10 @@ async function findSatoruEpisode(animeTitle, episodeNum) {
     if (!animeId) throw new Error(`Anime not found`);
     console.log(`✅ Satoru found: "${bestMatch}" (ID: ${animeId})`);
 
-    // Get episode list with ultra-fast timeout
     const episodeUrl = `https://satoru.one/ajax/episode/list/${animeId}`;
     const episodeResponse = await axios.get(episodeUrl, {
       headers: getHeaders('https://satoru.one'),
-      timeout: 3000
+      timeout: 8000
     });
 
     if (!episodeResponse.data.html) {
@@ -174,8 +264,7 @@ async function findSatoruEpisode(animeTitle, episodeNum) {
     const $$ = load(episodeResponse.data.html);
     let epId = null;
     
-    // Find the specific episode - check only first 10 episodes for ultra-speed
-    $$('.ep-item').slice(0, 10).each((i, el) => {
+    $$('.ep-item').slice(0, 100).each((i, el) => {
       const num = $$(el).attr('data-number');
       const id = $$(el).attr('data-id');
       if (num && id && String(num) === String(episodeNum)) {
@@ -184,21 +273,12 @@ async function findSatoruEpisode(animeTitle, episodeNum) {
       }
     });
 
-    // Ultra-fast fallback to first episode
-    if (!epId) {
-      const firstEp = $$('.ep-item').first();
-      if (firstEp.length) {
-        epId = firstEp.attr('data-id');
-      }
-    }
-
     if (!epId) throw new Error(`Episode ${episodeNum} not found`);
 
-    // Get servers with ultra-fast timeout
     const serversUrl = `https://satoru.one/ajax/episode/servers?episodeId=${epId}`;
     const serversResponse = await axios.get(serversUrl, {
       headers: getHeaders('https://satoru.one'),
-      timeout: 3000
+      timeout: 8000
     });
 
     const $$$ = load(serversResponse.data.html);
@@ -209,11 +289,10 @@ async function findSatoruEpisode(animeTitle, episodeNum) {
     const serverSourceId = serverItem.attr('data-id');
     if (!serverSourceId) throw new Error('No server source ID found');
 
-    // Get iframe source with ultra-fast timeout
     const sourceUrl = `https://satoru.one/ajax/episode/sources?id=${serverSourceId}`;
     const sourceResponse = await axios.get(sourceUrl, {
       headers: getHeaders('https://satoru.one'),
-      timeout: 3000
+      timeout: 8000
     });
 
     if (!sourceResponse.data || sourceResponse.data.type !== 'iframe') {
@@ -223,7 +302,6 @@ async function findSatoruEpisode(animeTitle, episodeNum) {
     const iframeUrl = sourceResponse.data.link;
     if (!iframeUrl) throw new Error('No iframe URL returned');
 
-    // Filter YouTube
     if (iframeUrl.toLowerCase().includes('youtube') || iframeUrl.toLowerCase().includes('youtu.be')) {
       throw new Error('YouTube source filtered out');
     }
@@ -249,37 +327,33 @@ async function findSatoruEpisode(animeTitle, episodeNum) {
 }
 
 // ==================== ULTRA-FAST ANIMEWORLD SCRAPING ====================
-async function findAnimeWorldEpisode(animeTitle, episode, sourceName) {
+async function findAnimeWorldEpisode(animeTitle, season, episode, sourceName) {
   const source = SOURCES.find(s => s.name === sourceName);
   if (!source) return null;
 
   try {
-    console.log(`🔍 ${source.name}: Searching for "${animeTitle}" episode ${episode}`);
+    console.log(`🔍 ${source.name}: Searching for "${animeTitle}" S${season}E${episode}`);
     
-    // Search for anime with ultra-fast timeout
     const searchUrl = `${source.searchUrl}${encodeURIComponent(animeTitle)}`;
     const searchResponse = await axios.get(searchUrl, {
       headers: getHeaders(source.baseUrl),
-      timeout: 3000
+      timeout: 8000
     });
 
     const $ = load(searchResponse.data);
     let slug = null;
     let foundTitle = null;
     
-    // Extract slug from search results - ULTRA-OPTIMIZED SELECTORS
-    $('.item, .post, .anime-card, article').slice(0, 5).each((i, el) => {
+    $('.item, .post, .anime-card, article, .film-list, .series-item').slice(0, 10).each((i, el) => {
       const $el = $(el);
-      const title = $el.find('h3, h2, .title, a').first().text().trim();
+      const title = $el.find('h3, h2, .title, a, .name, .entry-title').first().text().trim();
       const url = $el.find('a').first().attr('href');
       
       if (title && url) {
-        // Better matching logic
         const titleLower = title.toLowerCase();
         const searchLower = animeTitle.toLowerCase();
         
         if (titleLower.includes(searchLower) || searchLower.includes(titleLower)) {
-          // Try multiple slug patterns
           const slugMatch = url.match(/\/(anime|series)\/([^\/]+)/) || 
                            url.match(/\/([^\/]+)-episode/) ||
                            url.match(/\/([^\/]+)$/);
@@ -296,7 +370,6 @@ async function findAnimeWorldEpisode(animeTitle, episode, sourceName) {
 
     if (!slug) throw new Error('Anime not found in search results');
 
-    // Try episode patterns with ultra-fast timeout - PARALLEL PATTERN TESTING
     const patternPromises = source.patterns.map(async (pattern) => {
       const url = buildEpisodeUrl(pattern, slug, episode, source.baseUrl);
       
@@ -315,24 +388,13 @@ async function findAnimeWorldEpisode(animeTitle, episode, sourceName) {
       }
     });
 
-    // Wait for first successful pattern with timeout
-    const timeoutPromise = new Promise((resolve) => {
-      setTimeout(() => resolve(null), 2000);
-    });
-    
-    const result = await Promise.race([
-      Promise.allSettled(patternPromises).then(results => {
-        for (const result of results) {
-          if (result.status === 'fulfilled' && result.value) {
-            return result.value;
-          }
-        }
-        return null;
-      }),
-      timeoutPromise
-    ]);
+    const results = await Promise.allSettled(patternPromises);
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value) {
+        return result.value;
+      }
+    }
 
-    if (result) return result;
     throw new Error('No working episodes found');
 
   } catch (err) {
@@ -341,18 +403,17 @@ async function findAnimeWorldEpisode(animeTitle, episode, sourceName) {
   }
 }
 
-// ==================== ULTRA-FAST PARALLEL SOURCE SEARCH ====================
-async function searchAllSourcesParallel(animeTitle, episode) {
+// ==================== PARALLEL SOURCE SEARCH ====================
+async function searchAllSourcesParallel(animeTitle, season, episode) {
   const promises = [];
   
-  // Start all searches in parallel
   for (const source of SOURCES) {
     const promise = (async () => {
       try {
         if (source.name === 'satoru.one') {
           return await findSatoruEpisode(animeTitle, episode);
         } else {
-          return await findAnimeWorldEpisode(animeTitle, episode, source.name);
+          return await findAnimeWorldEpisode(animeTitle, season, episode, source.name);
         }
       } catch (error) {
         return null;
@@ -362,32 +423,23 @@ async function searchAllSourcesParallel(animeTitle, episode) {
     promises.push(promise);
   }
 
-  // Wait for all promises with 3-second timeout (ultra-fast)
-  const timeoutPromise = new Promise((resolve) => {
-    setTimeout(() => resolve(null), 3000);
-  });
-
-  const result = await Promise.race([
-    Promise.allSettled(promises).then(results => {
-      for (const result of results) {
-        if (result.status === 'fulfilled' && result.value) {
-          return result.value;
-        }
-      }
-      return null;
-    }),
-    timeoutPromise
-  ]);
+  const results = await Promise.allSettled(promises);
   
-  return result;
+  for (const result of results) {
+    if (result.status === 'fulfilled' && result.value) {
+      return result.value;
+    }
+  }
+  
+  return null;
 }
 
-// ==================== ULTRA-FAST EPISODE URL TESTER ====================
+// ==================== OPTIMIZED EPISODE URL TESTER ====================
 async function tryEpisodeUrl(url, baseUrl) {
   try {
     const response = await axios.get(url, {
       headers: getHeaders(baseUrl),
-      timeout: 3000, // Ultra-fast timeout
+      timeout: 8000,
       validateStatus: () => true
     });
 
@@ -397,7 +449,6 @@ async function tryEpisodeUrl(url, baseUrl) {
     const $ = load(response.data);
     const servers = extractAllServers($, baseUrl);
     
-    // Filter YouTube and invalid URLs
     const filteredServers = servers.filter(server => 
       server.url && 
       !server.url.toLowerCase().includes('youtube') && 
@@ -416,12 +467,11 @@ async function tryEpisodeUrl(url, baseUrl) {
   }
 }
 
-// ==================== ULTRA-FAST HELPER FUNCTIONS ====================
+// ==================== IMPROVED HELPER FUNCTIONS ====================
 function extractAllServers($, baseUrl) {
   const servers = [];
   
-  // Find all iframes - limit to first 3 for ultra-performance
-  $('iframe').slice(0, 3).each((i, el) => {
+  $('iframe').slice(0, 5).each((i, el) => {
     let src = $(el).attr('src') || $(el).attr('data-src');
     if (src) {
       src = normalizeUrl(src, baseUrl);
@@ -431,6 +481,21 @@ function extractAllServers($, baseUrl) {
           url: src,
           type: 'iframe',
           server: detectServerType(src)
+        });
+      }
+    }
+  });
+
+  $('video source').slice(0, 3).each((i, el) => {
+    let src = $(el).attr('src');
+    if (src) {
+      src = normalizeUrl(src, baseUrl);
+      if (src && src.startsWith('http') && !src.includes('youtube')) {
+        servers.push({
+          name: `Direct Video ${i + 1}`,
+          url: src,
+          type: 'direct',
+          server: 'Direct'
         });
       }
     }
@@ -467,8 +532,17 @@ function detectServerType(url) {
   return 'Direct';
 }
 
-// ==================== PROFESSIONAL LOADING SCREEN ====================
-function sendLoadingScreen(res, title, episode, videoUrl, servers = []) {
+// ==================== PROFESSIONAL LOADING SCREEN WITH PROGRESS ====================
+function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], actualSeason = 1, mappingType = 'exact') {
+  let mappingMessage = '';
+  if (mappingType === 'auto_mapped') {
+    mappingMessage = `🎯 Auto-mapped to Season ${actualSeason}`;
+  } else if (mappingType === 'fallback') {
+    mappingMessage = `🔄 Fallback: Season ${actualSeason}, Episode 1`;
+  } else if (actualSeason > 1) {
+    mappingMessage = `🎬 Playing from Season ${actualSeason}`;
+  }
+
   const html = `<!DOCTYPE html>
 <html>
 <head>
@@ -483,11 +557,13 @@ function sendLoadingScreen(res, title, episode, videoUrl, servers = []) {
         }
         body, html {
             overflow: hidden;
-            background: #0a0a0a;
+            background: #000;
             width: 100vw;
             height: 100vh;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
+        
+        /* Loading Screen Styles */
         .loading-container {
             position: fixed;
             top: 0;
@@ -502,60 +578,232 @@ function sendLoadingScreen(res, title, episode, videoUrl, servers = []) {
             z-index: 10000;
             color: white;
         }
+        
         .logo {
-            font-size: 2.5rem;
+            font-size: 3.5rem;
             font-weight: bold;
-            margin-bottom: 2rem;
+            margin-bottom: 3rem;
             background: linear-gradient(45deg, #ff6b6b, #4ecdc4, #45b7d1, #96ceb4);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
+            text-shadow: 0 0 50px rgba(78, 205, 196, 0.7);
+            animation: glow 2s ease-in-out infinite alternate;
         }
-        .spinner {
-            width: 60px;
-            height: 60px;
+        
+        @keyframes glow {
+            from { text-shadow: 0 0 20px rgba(78, 205, 196, 0.7); }
+            to { text-shadow: 0 0 30px rgba(78, 205, 196, 1), 0 0 40px rgba(78, 205, 196, 0.5); }
+        }
+        
+        .spinner-container {
+            position: relative;
+            width: 120px;
+            height: 120px;
+            margin-bottom: 3rem;
+        }
+        
+        .spinner-outer {
+            width: 100%;
+            height: 100%;
             border: 4px solid rgba(255, 255, 255, 0.1);
-            border-left: 4px solid #4ecdc4;
+            border-top: 4px solid #4ecdc4;
+            border-radius: 50%;
+            animation: spin 2s linear infinite;
+            position: absolute;
+        }
+        
+        .spinner-middle {
+            width: 80px;
+            height: 80px;
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            border-right: 3px solid #ff6b6b;
+            border-radius: 50%;
+            animation: spinReverse 1.5s linear infinite;
+            position: absolute;
+            top: 20px;
+            left: 20px;
+        }
+        
+        .spinner-inner {
+            width: 40px;
+            height: 40px;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-bottom: 2px solid #45b7d1;
             border-radius: 50%;
             animation: spin 1s linear infinite;
-            margin-bottom: 2rem;
+            position: absolute;
+            top: 40px;
+            left: 40px;
         }
+        
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        
+        @keyframes spinReverse {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(-360deg); }
+        }
+        
+        .loading-content {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        
         .loading-text {
-            font-size: 1.2rem;
-            margin-bottom: 0.5rem;
+            font-size: 1.8rem;
+            margin-bottom: 1rem;
             color: #e0e0e0;
+            font-weight: 300;
         }
-        .progress-container {
-            width: 300px;
-            height: 6px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 3px;
-            margin: 1rem 0;
-            overflow: hidden;
+        
+        .episode-info {
+            font-size: 1.4rem;
+            color: #4ecdc4;
+            margin-bottom: 2rem;
+            font-weight: 600;
         }
-        .progress-bar {
-            height: 100%;
-            background: linear-gradient(90deg, #4ecdc4, #45b7d1);
-            border-radius: 3px;
-            animation: progress 2s ease-in-out infinite;
-            transform-origin: left;
+        
+        .progress-section {
+            width: 400px;
+            margin: 2rem 0;
         }
-        @keyframes progress {
-            0% { transform: scaleX(0); }
-            50% { transform: scaleX(0.7); }
-            100% { transform: scaleX(1); }
-        }
-        .subtitle {
+        
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
             font-size: 0.9rem;
             color: #888;
-            margin-top: 1rem;
-            text-align: center;
-            max-width: 400px;
         }
+        
+        .progress-container {
+            width: 100%;
+            height: 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #4ecdc4, #45b7d1, #ff6b6b);
+            border-radius: 6px;
+            width: 0%;
+            transition: width 0.3s ease;
+            position: relative;
+        }
+        
+        .progress-bar::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent);
+            animation: shine 2s ease-in-out infinite;
+        }
+        
+        @keyframes shine {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        .progress-stats {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            color: #888;
+        }
+        
+        .loading-steps {
+            width: 400px;
+            margin-top: 2rem;
+        }
+        
+        .step {
+            display: flex;
+            align-items: center;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+            transition: all 0.3s ease;
+        }
+        
+        .step.active {
+            opacity: 1;
+        }
+        
+        .step.completed {
+            opacity: 0.8;
+        }
+        
+        .step-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 1rem;
+            font-size: 0.8rem;
+        }
+        
+        .step.active .step-icon {
+            background: #4ecdc4;
+            animation: pulse 1s infinite;
+        }
+        
+        .step.completed .step-icon {
+            background: #00ff88;
+        }
+        
+        .step-text {
+            flex: 1;
+            font-size: 0.9rem;
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+        
+        .subtitle {
+            font-size: 1rem;
+            color: #666;
+            margin-top: 2rem;
+            text-align: center;
+            max-width: 500px;
+            line-height: 1.5;
+        }
+        
+        .season-info {
+            background: rgba(78, 205, 196, 0.2);
+            padding: 12px 24px;
+            border-radius: 25px;
+            margin-top: 2rem;
+            font-size: 1rem;
+            border: 1px solid rgba(78, 205, 196, 0.4);
+            backdrop-filter: blur(10px);
+        }
+        
+        .mapping-info {
+            background: rgba(255, 107, 107, 0.2);
+            padding: 12px 24px;
+            border-radius: 25px;
+            margin-top: 1rem;
+            font-size: 1rem;
+            border: 1px solid rgba(255, 107, 107, 0.4);
+            backdrop-filter: blur(10px);
+        }
+        
+        /* Player Styles */
         .player-container {
             position: fixed;
             top: 0;
@@ -565,71 +813,146 @@ function sendLoadingScreen(res, title, episode, videoUrl, servers = []) {
             background: #000;
             display: none;
         }
+        
         iframe {
             width: 100%;
             height: 100%;
             border: none;
             background: #000;
         }
+        
         .player-info {
             position: fixed;
-            top: 15px;
-            left: 15px;
-            background: rgba(0,0,0,0.85);
-            color: white;
-            padding: 10px 15px;
-            border-radius: 8px;
-            z-index: 1000;
-            font-size: 14px;
-            border: 1px solid rgba(255,255,255,0.1);
-            backdrop-filter: blur(10px);
-            max-width: 300px;
-            transition: opacity 0.3s;
-        }
-        .server-list {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
+            top: 20px;
+            left: 20px;
             background: rgba(0,0,0,0.9);
             color: white;
-            padding: 15px;
-            border-radius: 8px;
+            padding: 12px 18px;
+            border-radius: 10px;
             z-index: 1000;
-            font-size: 12px;
-            border: 1px solid rgba(255,255,255,0.1);
-            backdrop-filter: blur(10px);
+            font-size: 14px;
+            border: 1px solid rgba(255,255,255,0.2);
+            backdrop-filter: blur(15px);
+            max-width: 350px;
             transition: opacity 0.3s;
         }
+        
+        .server-list {
+            position: fixed;
+            bottom: 25px;
+            right: 25px;
+            background: rgba(0,0,0,0.9);
+            color: white;
+            padding: 18px;
+            border-radius: 12px;
+            z-index: 1000;
+            font-size: 13px;
+            border: 1px solid rgba(255,255,255,0.2);
+            backdrop-filter: blur(15px);
+            transition: opacity 0.3s;
+        }
+        
         .server-item {
-            padding: 5px 0;
+            padding: 8px 0;
             border-bottom: 1px solid rgba(255,255,255,0.1);
         }
+        
         .server-item:last-child {
             border-bottom: none;
+        }
+        
+        .auto-play-notice {
+            position: fixed;
+            bottom: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.8);
+            color: #00ff88;
+            padding: 10px 20px;
+            border-radius: 25px;
+            font-size: 12px;
+            z-index: 1000;
+            transition: opacity 0.3s;
+            border: 1px solid rgba(0,255,136,0.3);
         }
     </style>
 </head>
 <body>
+    <!-- Loading Screen -->
     <div class="loading-container" id="loadingScreen">
         <div class="logo">ANIME STREAM</div>
-        <div class="spinner"></div>
-        <div class="loading-text">Loading Episode ${episode}</div>
-        <div class="progress-container">
-            <div class="progress-bar"></div>
+        
+        <div class="spinner-container">
+            <div class="spinner-outer"></div>
+            <div class="spinner-middle"></div>
+            <div class="spinner-inner"></div>
         </div>
-        <div class="subtitle">Preparing your streaming experience • Ultra-fast loading • No buffering</div>
+        
+        <div class="loading-content">
+            <div class="loading-text">Preparing Your Stream</div>
+            <div class="episode-info">${title} - Episode ${episode}</div>
+        </div>
+        
+        <div class="progress-section">
+            <div class="progress-header">
+                <span>Loading Progress</span>
+                <span id="progressPercent">0%</span>
+            </div>
+            <div class="progress-container">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+            <div class="progress-stats">
+                <span>Initializing...</span>
+                <span id="progressStatus">0% Done</span>
+            </div>
+        </div>
+        
+        <div class="loading-steps">
+            <div class="step active" id="step1">
+                <div class="step-icon">1</div>
+                <div class="step-text">Connecting to streaming sources</div>
+            </div>
+            <div class="step" id="step2">
+                <div class="step-icon">2</div>
+                <div class="step-text">Fetching episode data</div>
+            </div>
+            <div class="step" id="step3">
+                <div class="step-icon">3</div>
+                <div class="step-text">Loading video player</div>
+            </div>
+            <div class="step" id="step4">
+                <div class="step-icon">4</div>
+                <div class="step-text">Ready to play</div>
+            </div>
+        </div>
+        
+        <div class="subtitle">
+            Smart season detection • Ultra-fast loading • Professional streaming experience
+        </div>
+        
+        ${mappingMessage ? `
+        <div class="${mappingType === 'auto_mapped' ? 'mapping-info' : 'season-info'}">
+            ${mappingMessage}
+        </div>
+        ` : ''}
     </div>
 
+    <!-- Player Container -->
     <div class="player-container" id="playerContainer">
         <div class="player-info">
-            🎬 ${title} - Episode ${episode}
+            🎬 ${title} - Episode ${episode} ${actualSeason > 1 ? `(Season ${actualSeason})` : ''}
+            ${mappingType !== 'exact' ? `<br><small style="color: #ff6b6b;">${mappingMessage}</small>` : ''}
         </div>
         
         <div class="server-list">
-            <div style="margin-bottom: 10px; font-weight: bold;">📡 Available Servers:</div>
+            <div style="margin-bottom: 12px; font-weight: bold; font-size: 14px;">📡 Available Servers:</div>
             ${servers.map((server, index) => 
                 `<div class="server-item">${index + 1}. ${server.name} (${server.server})</div>`
             ).join('')}
+        </div>
+        
+        <div class="auto-play-notice">
+            🔄 Auto-play enabled • Professional Streaming
         </div>
 
         <iframe 
@@ -643,51 +966,138 @@ function sendLoadingScreen(res, title, episode, videoUrl, servers = []) {
     </div>
 
     <script>
-        // Show loading screen initially
         const loadingScreen = document.getElementById('loadingScreen');
         const playerContainer = document.getElementById('playerContainer');
         const videoFrame = document.getElementById('videoFrame');
-
-        // Simulate loading progress with random timing for realism
-        let progress = 0;
-        const progressInterval = setInterval(() => {
-            progress += Math.random() * 15;
-            if (progress >= 95) {
-                clearInterval(progressInterval);
+        const progressBar = document.getElementById('progressBar');
+        const progressPercent = document.getElementById('progressPercent');
+        const progressStatus = document.getElementById('progressStatus');
+        
+        let currentProgress = 0;
+        const totalSteps = 4;
+        let currentStep = 1;
+        
+        // Progress simulation with realistic timing
+        const progressIntervals = [
+            { target: 25, duration: 1500, text: "Connecting to sources..." },
+            { target: 50, duration: 2000, text: "Fetching episode data..." },
+            { target: 75, duration: 1800, text: "Loading video player..." },
+            { target: 95, duration: 1200, text: "Finalizing stream..." },
+            { target: 100, duration: 500, text: "Ready!" }
+        ];
+        
+        function updateProgress(target, duration, statusText) {
+            return new Promise((resolve) => {
+                const start = currentProgress;
+                const increment = (target - start) / (duration / 50);
+                
+                const timer = setInterval(() => {
+                    currentProgress += increment;
+                    if (currentProgress >= target) {
+                        currentProgress = target;
+                        clearInterval(timer);
+                        resolve();
+                    }
+                    
+                    progressBar.style.width = currentProgress + '%';
+                    progressPercent.textContent = Math.round(currentProgress) + '%';
+                    progressStatus.textContent = statusText || Math.round(currentProgress) + '% Done';
+                    
+                }, 50);
+            });
+        }
+        
+        function updateStep(stepNumber) {
+            // Reset all steps
+            for (let i = 1; i <= totalSteps; i++) {
+                const step = document.getElementById('step' + i);
+                step.classList.remove('active', 'completed');
             }
-        }, 200);
-
-        // Wait for iframe to load, then switch to player
-        videoFrame.onload = function() {
+            
+            // Mark previous steps as completed
+            for (let i = 1; i < stepNumber; i++) {
+                const step = document.getElementById('step' + i);
+                step.classList.add('completed');
+            }
+            
+            // Mark current step as active
+            if (stepNumber <= totalSteps) {
+                const step = document.getElementById('step' + stepNumber);
+                step.classList.add('active');
+            }
+        }
+        
+        async function simulateLoading() {
+            console.log('🚀 Starting loading simulation...');
+            
+            // Step 1: Initial connection
+            updateStep(1);
+            await updateProgress(25, 1500, "Connecting to streaming sources...");
+            
+            // Step 2: Fetching data
+            updateStep(2);
+            await updateProgress(50, 2000, "Fetching episode data...");
+            
+            // Step 3: Loading player
+            updateStep(3);
+            await updateProgress(75, 1800, "Loading video player...");
+            
+            // Step 4: Finalizing
+            updateStep(4);
+            await updateProgress(95, 1200, "Finalizing stream...");
+            
+            // Wait for iframe to load or timeout
+            const loadPromise = new Promise((resolve) => {
+                videoFrame.onload = resolve;
+                videoFrame.onerror = resolve;
+            });
+            
+            // Wait for either iframe load or 2 seconds
+            await Promise.race([loadPromise, new Promise(resolve => setTimeout(resolve, 2000))]);
+            
+            // Final completion
+            await updateProgress(100, 500, "Ready to play!");
+            
+            // Transition to player
             setTimeout(() => {
                 loadingScreen.style.display = 'none';
                 playerContainer.style.display = 'block';
-                console.log('🎬 Stream loaded successfully');
+                console.log('🎉 Stream loaded successfully!');
                 
                 // Auto-play enhancement
                 videoFrame.focus();
                 setTimeout(() => {
                     window.focus();
-                    videoFrame.contentWindow?.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
+                    try {
+                        videoFrame.contentWindow?.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
+                    } catch (e) {
+                        console.log('Auto-play command sent');
+                    }
                 }, 1000);
-            }, 500); // Small delay for smooth transition
-        };
-
-        // Fallback: if loading takes too long, show player anyway
+            }, 1000);
+        }
+        
+        // Start the loading simulation
+        simulateLoading().catch(console.error);
+        
+        // Ultimate fallback - if something goes wrong, show player after 8 seconds
         setTimeout(() => {
             if (loadingScreen.style.display !== 'none') {
+                console.log('🔄 Fallback: Showing player after timeout');
                 loadingScreen.style.display = 'none';
                 playerContainer.style.display = 'block';
-                console.log('⏱️  Fallback: Showing player after timeout');
             }
-        }, 5000);
-
-        // Hide info panels after 5 seconds
+        }, 8000);
+        
+        // Hide controls after 5 seconds
         setTimeout(() => {
             const info = document.querySelector('.player-info');
             const servers = document.querySelector('.server-list');
-            if (info) info.style.opacity = '0.5';
-            if (servers) servers.style.opacity = '0.5';
+            const notice = document.querySelector('.auto-play-notice');
+            
+            if (info) info.style.opacity = '0.3';
+            if (servers) servers.style.opacity = '0.3';
+            if (notice) notice.style.opacity = '0.5';
         }, 5000);
     </script>
 </body>
@@ -711,14 +1121,13 @@ function sendCleanIframe(res, url, title = 'Player', episode = 1) {
 <body>
     <iframe 
         src="${url}" 
-        allow="autoplay; fullscreen; encrypted-media" 
+        allow="autoplay; full-screen; encrypted-media" 
         allowfullscreen
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
         loading="eager">
     </iframe>
     
     <script>
-        // Auto-play for clean iframe
         document.addEventListener('DOMContentLoaded', function() {
             const iframe = document.querySelector('iframe');
             iframe?.focus();
@@ -741,17 +1150,13 @@ app.get('/api/anime/:anilistId/:episode', async (req, res) => {
     console.log(`\n⚡ AniList Stream: ID ${anilistId} Episode ${episode}`);
     apiStats.totalRequests++;
 
-    // Step 1: Get titles from AniList with ultra-fast timeout
     const titleData = await getAnimeTitleFromAniList(anilistId);
     console.log(`✅ AniList Data: "${titleData.primary}"`);
     
-    // Step 2: Use only primary title for ultra-speed
     const searchTitle = titleData.primary;
-
     console.log(`🔍 Searching with: "${searchTitle}"`);
 
-    // Step 3: ULTRA-FAST PARALLEL SEARCH ACROSS ALL SOURCES
-    const episodeData = await searchAllSourcesParallel(searchTitle, episode);
+    const episodeData = await findEpisodeAcrossSeasons(searchTitle, parseInt(episode));
 
     if (!episodeData) {
       apiStats.failedRequests++;
@@ -763,26 +1168,27 @@ app.get('/api/anime/:anilistId/:episode', async (req, res) => {
         episode: parseInt(episode),
         response_time: `${responseTime}ms`,
         sources_tried: SOURCES.map(s => s.name),
-        suggestion: 'Try the name-based endpoint: /api/stream/' + encodeURIComponent(titleData.primary) + '/1'
+        suggestion: 'Episode might not be available yet'
       });
     }
 
     apiStats.successfulRequests++;
     const responseTime = Date.now() - startTime;
-    console.log(`⏱️  ULTRA-FAST response: ${responseTime}ms`);
+    console.log(`⏱️  SMART RESPONSE: ${responseTime}ms`);
 
-    // Return iframe directly
     if (clean !== 'false') {
       return sendCleanIframe(res, episodeData.servers[0].url, titleData.primary, episode);
     }
 
-    // JSON response
     if (json) {
       return res.json({
         success: true,
         anilist_id: parseInt(anilistId),
         title: titleData.primary,
-        episode: parseInt(episode),
+        requested_episode: parseInt(episode),
+        actual_episode: episodeData.actualEpisode,
+        actual_season: episodeData.actualSeason,
+        mapping_type: episodeData.mappingType,
         source: episodeData.source,
         servers: episodeData.servers,
         total_servers: episodeData.servers.length,
@@ -790,9 +1196,9 @@ app.get('/api/anime/:anilistId/:episode', async (req, res) => {
       });
     }
 
-    // Default: professional loading screen with player
-    return sendLoadingScreen(res, titleData.primary, episode, 
-                            episodeData.servers[0].url, episodeData.servers);
+    return sendEnhancedPlayer(res, titleData.primary, episode, 
+                            episodeData.servers[0].url, episodeData.servers, 
+                            episodeData.actualSeason, episodeData.mappingType);
 
   } catch (error) {
     const responseTime = Date.now() - startTime;
@@ -817,8 +1223,7 @@ app.get('/api/stream/:name/:episode', async (req, res) => {
     console.log(`\n🎬 Stream: ${name} Episode ${episode}`);
     apiStats.totalRequests++;
 
-    // ULTRA-FAST PARALLEL SEARCH ACROSS ALL SOURCES
-    const episodeData = await searchAllSourcesParallel(name, episode);
+    const episodeData = await findEpisodeAcrossSeasons(name, parseInt(episode));
 
     if (!episodeData) {
       apiStats.failedRequests++;
@@ -835,7 +1240,7 @@ app.get('/api/stream/:name/:episode', async (req, res) => {
 
     apiStats.successfulRequests++;
     const responseTime = Date.now() - startTime;
-    console.log(`⏱️  ULTRA-FAST response: ${responseTime}ms`);
+    console.log(`⏱️  SMART RESPONSE: ${responseTime}ms`);
 
     if (clean !== 'false') {
       return sendCleanIframe(res, episodeData.servers[0].url, name, episode);
@@ -845,15 +1250,19 @@ app.get('/api/stream/:name/:episode', async (req, res) => {
       return res.json({
         success: true,
         title: name,
-        episode: parseInt(episode),
+        requested_episode: parseInt(episode),
+        actual_episode: episodeData.actualEpisode,
+        actual_season: episodeData.actualSeason,
+        mapping_type: episodeData.mappingType,
         source: episodeData.source,
         servers: episodeData.servers,
         response_time: `${responseTime}ms`
       });
     }
 
-    return sendLoadingScreen(res, name, episode, 
-                            episodeData.servers[0].url, episodeData.servers);
+    return sendEnhancedPlayer(res, name, episode, 
+                            episodeData.servers[0].url, episodeData.servers,
+                            episodeData.actualSeason, episodeData.mappingType);
 
   } catch (error) {
     const responseTime = Date.now() - startTime;
@@ -871,13 +1280,11 @@ app.get('/api/stream/:name/:episode', async (req, res) => {
 // ==================== KEEP OLD ENDPOINTS FOR COMPATIBILITY ====================
 app.get('/api/anime/:anilistId/:season/:episode', async (req, res) => {
   const { anilistId, episode } = req.params;
-  // Redirect to new endpoint without season
   res.redirect(`/api/anime/${anilistId}/${episode}`);
 });
 
 app.get('/api/stream/:name/:season/:episode', async (req, res) => {
   const { name, episode } = req.params;
-  // Redirect to new endpoint without season
   res.redirect(`/api/stream/${name}/${episode}`);
 });
 
@@ -888,43 +1295,40 @@ app.get('/health', (req, res) => {
     
   res.json({ 
     status: 'active', 
-    version: '3.0.0',
-    performance: 'ULTRA-FAST 3-second optimized',
+    version: '5.0.0',
+    performance: 'PROFESSIONAL LOADING EXPERIENCE',
     total_requests: apiStats.totalRequests,
     successful_requests: apiStats.successfulRequests,
     failed_requests: apiStats.failedRequests,
     anilist_requests: apiStats.anilistRequests,
     success_rate: successRate + '%',
     sources: SOURCES.map(s => s.name),
-    strategy: 'Ultra-fast parallel search with 3s timeouts',
+    strategy: 'Professional loading with progress simulation',
     features: [
-      'Professional loading screen',
-      '3-second load guarantee',
-      'Ultra-fast parallel searching',
-      'No YouTube filtering',
-      'Season-less episodes',
-      'Backward compatibility'
+      '5-second animated loading screen',
+      'Realistic progress simulation',
+      'Step-by-step loading indicators',
+      'Triple spinner animation',
+      'Professional UI/UX'
     ]
   });
 });
 
 app.get('/', (req, res) => res.json({ 
-  message: '⚡ ULTRA-FAST ANIME STREAMING API',
-  version: '3.0.0',
-  performance: '3-second optimized load times',
+  message: '⚡ PROFESSIONAL ANIME STREAMING API',
+  version: '5.0.0',
+  performance: 'Professional loading experience',
   sources: ['satoru.one', 'watchanimeworld.in', 'animeworld-india.me'],
-  strategy: 'Ultra-fast parallel search • 3s timeouts',
+  strategy: 'Smart multi-season mapping • Professional loading',
   endpoints: {
-    '/api/anime/:anilistId/:episode': 'AniList streaming (3s optimized)',
-    '/api/stream/:name/:episode': 'Name-based streaming',
-    '/api/anime/:anilistId/:season/:episode': 'Legacy endpoint (redirects)',
-    '/api/stream/:name/:season/:episode': 'Legacy endpoint (redirects)',
+    '/api/anime/:anilistId/:episode': 'AniList streaming (professional loading)',
+    '/api/stream/:name/:episode': 'Name-based streaming (professional loading)',
     '/health': 'API status with performance metrics'
   },
   test_urls: [
-    '/api/anime/21/1',
-    '/api/anime/269/1', 
-    '/api/anime/813/1',
+    '/api/anime/113415/23', // JJK Episode 23
+    '/api/anime/113415/25', // JJK should map to Season 2
+    '/api/anime/21/1000',   // One Piece should map to latest season
     '/api/stream/one piece/1'
   ]
 }));
@@ -933,37 +1337,37 @@ app.get('/', (req, res) => res.json({
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`
-⚡ ULTRA-FAST ANIME API v3.0 - 3 SECOND LOAD TIMES
+⚡ PROFESSIONAL ANIME API v5.0 - LOADING EXPERIENCE
 ───────────────────────────────────────────
 Port: ${PORT}
 API: http://localhost:${PORT}
 
-🚀 ULTRA-FAST OPTIMIZATIONS:
-• 3-second timeout limits (100x faster)
-• Reduced search results (first 3 only)
-• Ultra-fast AniList queries (2s timeout)
-• Parallel pattern testing
-• Professional loading screen
+🎨 PROFESSIONAL LOADING:
+• 5-second animated loading screen
+• Realistic progress simulation (0-100%)
+• Step-by-step loading indicators
+• Triple spinner animation
+• Professional progress bar
 
-🎯 SOURCES (ULTRA-FAST PARALLEL SEARCH):
-1. satoru.one - PRIMARY
-2. watchanimeworld.in - FALLBACK 
-3. animeworld-india.me - FALLBACK
+📊 LOADING STEPS:
+1. Connecting to streaming sources
+2. Fetching episode data  
+3. Loading video player
+4. Ready to play
 
-✨ PROFESSIONAL FEATURES:
-• Beautiful gradient loading screen
-• Animated progress bar
-• Smooth transitions
-• Auto-play enabled
-• Mobile optimized
+⏱️  LOADING FEATURES:
+• Progress percentage (0% - 100%)
+• Status messages for each step
+• Animated progress bar with shine effect
+• Step completion indicators
+• 8-second fallback timeout
 
-📊 TEST ENDPOINTS:
-• /api/anime/21/1 - One Piece (3s optimized)
-• /api/anime/269/1 - Bleach
-• /api/anime/813/1 - Dragon Ball Z
-• /health - Performance metrics
+🚀 TEST WITH:
+• /api/anime/113415/23 - JJK S1E23
+• /api/anime/113415/25 - JJK auto-mapped to S2
+• /api/anime/21/1000   - One Piece latest
 
-✅ GUARANTEED: Under 3-second response times
+✅ READY: Professional loading experience active
 ───────────────────────────────────────────
   `);
 });

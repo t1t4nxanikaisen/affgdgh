@@ -745,12 +745,6 @@ function sendErrorScreen(res, title, episode, errorMessage, anilistId = null) {
             </ul>
         </div>
         
-        <div class="action-buttons">
-            <a href="/" class="btn btn-primary">🏠 Go Home</a>
-            <a href="/health" class="btn btn-secondary">📊 Check Status</a>
-            <button onclick="history.back()" class="btn btn-secondary">↩️ Go Back</button>
-        </div>
-        
         <div class="technical-info">
              If this persists, contact support
         </div>

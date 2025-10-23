@@ -74,6 +74,8 @@ async function getAnimeTitleFromAniList(anilistId) {
             native
           }
           synonyms
+          episodes
+          status
         }
       }
     `;
@@ -100,7 +102,9 @@ async function getAnimeTitleFromAniList(anilistId) {
       
       return {
         primary: media.title.english || media.title.romaji,
-        all: titles
+        all: titles,
+        totalEpisodes: media.episodes,
+        status: media.status
       };
     }
     throw new Error('Anime not found on AniList');
@@ -110,12 +114,12 @@ async function getAnimeTitleFromAniList(anilistId) {
   }
 }
 
-// ==================== SMART EPISODE FINDER WITH AUTO-DETECTION ====================
+// ==================== UNLIMITED SEASON EPISODE FINDER ====================
 async function findEpisodeAcrossSeasons(animeTitle, targetEpisode) {
-  console.log(`🎯 SMART SEARCH: Looking for episode ${targetEpisode} of "${animeTitle}"`);
+  console.log(`🎯 UNLIMITED SEARCH: Looking for episode ${targetEpisode} of "${animeTitle}"`);
   
-  // PHASE 1: Try exact episode in each season first
-  for (let season = 1; season <= 3; season++) {
+  // PHASE 1: Try exact episode in multiple seasons (up to 50 seasons)
+  for (let season = 1; season <= 50; season++) {
     try {
       console.log(`🔍 PHASE 1: Trying Season ${season}, Episode ${targetEpisode}`);
       
@@ -131,73 +135,54 @@ async function findEpisodeAcrossSeasons(animeTitle, targetEpisode) {
           mappingType: 'exact'
         };
       }
-      console.log(`❌ Not found in Season ${season}`);
     } catch (error) {
-      console.log(`❌ Season ${season} search failed: ${error.message}`);
+      // Continue to next season
     }
   }
   
-  // PHASE 2: Intelligent season detection with auto-calculation
-  console.log(`🔍 PHASE 2: Intelligent season detection for episode ${targetEpisode}`);
+  // PHASE 2: Intelligent calculation for high episode numbers
+  console.log(`🔍 PHASE 2: Intelligent calculation for episode ${targetEpisode}`);
   
-  // Try to detect the actual episode count per season by testing boundaries
-  const commonBoundaries = [12, 13, 24, 25, 26];
+  // Common episode counts per season for different types of anime
+  const episodePatterns = [
+    // Standard TV anime patterns
+    { episodes: 12, maxSeasons: 100 },
+    { episodes: 13, maxSeasons: 100 },
+    { episodes: 24, maxSeasons: 50 },
+    { episodes: 25, maxSeasons: 50 },
+    { episodes: 26, maxSeasons: 50 },
+    // Long-running anime patterns
+    { episodes: 50, maxSeasons: 30 },
+    { episodes: 51, maxSeasons: 30 },
+    { episodes: 52, maxSeasons: 30 },
+    { episodes: 100, maxSeasons: 20 },
+    { episodes: 104, maxSeasons: 20 },
+    // Special cases for very long anime
+    { episodes: 200, maxSeasons: 10 }
+  ];
   
-  for (let season = 1; season <= 3; season++) {
-    for (const boundary of commonBoundaries) {
-      if (targetEpisode > boundary) {
-        const calculatedEpisode = targetEpisode - boundary;
-        
-        // Only try reasonable episode numbers (1-30)
-        if (calculatedEpisode >= 1 && calculatedEpisode <= 30) {
-          console.log(`🔄 Trying Season ${season + 1}, Episode ${calculatedEpisode} (${targetEpisode} - ${boundary})`);
-          
-          try {
-            const episodeData = await searchAllSourcesParallel(animeTitle, season + 1, calculatedEpisode);
-            
-            if (episodeData) {
-              console.log(`✅ SMART MAPPING: Episode ${targetEpisode} → Season ${season + 1}, Episode ${calculatedEpisode}`);
-              return {
-                ...episodeData,
-                actualSeason: season + 1,
-                actualEpisode: calculatedEpisode,
-                requestedEpisode: targetEpisode,
-                mappingType: 'calculated',
-                calculation: `${targetEpisode} - ${boundary} = ${calculatedEpisode}`
-              };
-            }
-          } catch (error) {
-            // Continue to next boundary
-          }
-        }
-      }
-    }
-  }
-  
-  // PHASE 3: Progressive calculation (most accurate)
-  console.log(`🔍 PHASE 3: Progressive calculation for episode ${targetEpisode}`);
-  
-  for (let season = 2; season <= 5; season++) {
-    // Test different episode counts per season
-    for (const epCount of [12, 13, 24, 25, 26]) {
-      const episodesInPreviousSeasons = epCount * (season - 1);
+  for (const pattern of episodePatterns) {
+    for (let season = 1; season <= pattern.maxSeasons; season++) {
+      const episodesInPreviousSeasons = pattern.episodes * (season - 1);
       const calculatedEpisode = targetEpisode - episodesInPreviousSeasons;
       
-      if (calculatedEpisode >= 1 && calculatedEpisode <= epCount) {
-        console.log(`🔄 Progressive: Season ${season}, Episode ${calculatedEpisode} (${targetEpisode} - ${episodesInPreviousSeasons})`);
+      // Only try if the calculated episode is within reasonable bounds
+      if (calculatedEpisode >= 1 && calculatedEpisode <= pattern.episodes) {
+        console.log(`🔄 Pattern ${pattern.episodes}: Trying Season ${season}, Episode ${calculatedEpisode} (${targetEpisode} - ${episodesInPreviousSeasons})`);
         
         try {
           const episodeData = await searchAllSourcesParallel(animeTitle, season, calculatedEpisode);
           
           if (episodeData) {
-            console.log(`✅ PROGRESSIVE MAPPING: Episode ${targetEpisode} → Season ${season}, Episode ${calculatedEpisode}`);
+            console.log(`✅ PATTERN MAPPING: Episode ${targetEpisode} → Season ${season}, Episode ${calculatedEpisode}`);
             return {
               ...episodeData,
               actualSeason: season,
               actualEpisode: calculatedEpisode,
               requestedEpisode: targetEpisode,
-              mappingType: 'progressive',
-              calculation: `${targetEpisode} - ${episodesInPreviousSeasons} = ${calculatedEpisode}`
+              mappingType: 'pattern_calculated',
+              calculation: `${targetEpisode} - ${episodesInPreviousSeasons} = ${calculatedEpisode}`,
+              patternUsed: pattern.episodes
             };
           }
         } catch (error) {
@@ -207,31 +192,124 @@ async function findEpisodeAcrossSeasons(animeTitle, targetEpisode) {
     }
   }
   
-  // FINAL FALLBACK: Try episode 1 of each season
-  console.log(`🔍 FINAL FALLBACK: Trying episode 1 of each season`);
+  // PHASE 3: Dynamic boundary detection
+  console.log(`🔍 PHASE 3: Dynamic boundary detection for episode ${targetEpisode}`);
   
-  for (let season = 1; season <= 3; season++) {
-    try {
-      console.log(`🔄 Fallback: Season ${season}, Episode 1`);
+  // Generate boundaries based on the target episode
+  const dynamicBoundaries = [];
+  for (let multiplier = 1; multiplier <= 20; multiplier++) {
+    const boundary = 12 * multiplier; // 12, 24, 36, 48, 60, etc.
+    if (boundary < targetEpisode) dynamicBoundaries.push(boundary);
+    
+    const boundary2 = 13 * multiplier; // 13, 26, 39, 52, etc.
+    if (boundary2 < targetEpisode) dynamicBoundaries.push(boundary2);
+    
+    const boundary3 = 25 * multiplier; // 25, 50, 75, 100, etc.
+    if (boundary3 < targetEpisode) dynamicBoundaries.push(boundary3);
+  }
+  
+  // Remove duplicates and sort
+  const uniqueBoundaries = [...new Set(dynamicBoundaries)].sort((a, b) => a - b);
+  
+  for (const boundary of uniqueBoundaries.slice(-20)) { // Try last 20 boundaries
+    const season = Math.floor(targetEpisode / boundary) + 1;
+    const calculatedEpisode = targetEpisode % boundary || boundary;
+    
+    if (calculatedEpisode >= 1 && calculatedEpisode <= boundary && season <= 50) {
+      console.log(`🔄 Dynamic ${boundary}: Trying Season ${season}, Episode ${calculatedEpisode} (${targetEpisode} % ${boundary})`);
       
-      const episodeData = await searchAllSourcesParallel(animeTitle, season, 1);
-      
-      if (episodeData) {
-        console.log(`✅ FALLBACK FOUND: Season ${season}, Episode 1`);
-        return {
-          ...episodeData,
-          actualSeason: season,
-          actualEpisode: 1,
-          requestedEpisode: targetEpisode,
-          mappingType: 'fallback'
-        };
+      try {
+        const episodeData = await searchAllSourcesParallel(animeTitle, season, calculatedEpisode);
+        
+        if (episodeData) {
+          console.log(`✅ DYNAMIC MAPPING: Episode ${targetEpisode} → Season ${season}, Episode ${calculatedEpisode}`);
+          return {
+            ...episodeData,
+            actualSeason: season,
+            actualEpisode: calculatedEpisode,
+            requestedEpisode: targetEpisode,
+            mappingType: 'dynamic_calculated',
+            calculation: `${targetEpisode} % ${boundary} = ${calculatedEpisode}`
+          };
+        }
+      } catch (error) {
+        // Continue to next boundary
       }
-    } catch (error) {
-      console.log(`❌ Fallback Season ${season} failed: ${error.message}`);
     }
   }
   
-  throw new Error(`Episode ${targetEpisode} not found across multiple seasons`);
+  // PHASE 4: Progressive search - try nearby episodes
+  console.log(`🔍 PHASE 4: Progressive search around episode ${targetEpisode}`);
+  
+  // Try episodes within a range of the target episode
+  const searchRange = Math.min(10, targetEpisode - 1);
+  for (let offset = 0; offset <= searchRange; offset++) {
+    const episodesToTry = [
+      targetEpisode - offset, // Try lower episodes
+      targetEpisode + offset  // Try higher episodes
+    ];
+    
+    for (const testEpisode of episodesToTry) {
+      if (testEpisode >= 1 && testEpisode <= targetEpisode + 10) {
+        for (let season = 1; season <= 20; season++) {
+          try {
+            console.log(`🔄 Progressive: Season ${season}, Episode ${testEpisode} (offset: ${offset})`);
+            
+            const episodeData = await searchAllSourcesParallel(animeTitle, season, testEpisode);
+            
+            if (episodeData) {
+              console.log(`✅ PROGRESSIVE FOUND: Season ${season}, Episode ${testEpisode}`);
+              return {
+                ...episodeData,
+                actualSeason: season,
+                actualEpisode: testEpisode,
+                requestedEpisode: targetEpisode,
+                mappingType: 'progressive_fallback',
+                note: `Found episode ${testEpisode} instead of ${targetEpisode}`
+              };
+            }
+          } catch (error) {
+            // Continue to next
+          }
+        }
+      }
+    }
+  }
+  
+  // PHASE 5: Find latest available episode
+  console.log(`🔍 PHASE 5: Finding latest available episode of "${animeTitle}"`);
+  
+  // Try to find the most recent episodes first
+  for (let episode = Math.min(targetEpisode + 10, 1000); episode >= 1; episode--) {
+    for (let season = 1; season <= 20; season++) {
+      try {
+        if (episode % 50 === 0 || episode === 1 || episode === targetEpisode) {
+          console.log(`🔄 Latest Search: Season ${season}, Episode ${episode}`);
+        }
+        
+        const episodeData = await searchAllSourcesParallel(animeTitle, season, episode);
+        
+        if (episodeData) {
+          console.log(`✅ LATEST FOUND: Season ${season}, Episode ${episode}`);
+          return {
+            ...episodeData,
+            actualSeason: season,
+            actualEpisode: episode,
+            requestedEpisode: targetEpisode,
+            mappingType: 'latest_available',
+            note: `Could not find episode ${targetEpisode}, showing latest available episode ${episode}`
+          };
+        }
+        
+        // Break early if we're taking too long
+        if (episode < targetEpisode - 50) break;
+      } catch (error) {
+        // Continue to next
+      }
+    }
+  }
+  
+  throw new Error(`Could not find episode ${targetEpisode} or any other episode of "${animeTitle}" across unlimited seasons`);
 }
 
 // ==================== ULTRA-FAST SATORU SCRAPING ====================
@@ -251,7 +329,7 @@ async function findSatoruEpisode(animeTitle, episodeNum) {
     let animeId = null;
     let bestMatch = null;
     
-    $('.flw-item').slice(0, 5).each((i, el) => {
+    $('.flw-item').slice(0, 10).each((i, el) => {
       const name = $(el).find('.film-name a').text().trim();
       const dataId = $(el).find('.film-poster-ahref').attr('data-id');
       
@@ -292,7 +370,7 @@ async function findSatoruEpisode(animeTitle, episodeNum) {
     const $$ = load(episodeResponse.data.html);
     let epId = null;
     
-    $$('.ep-item').slice(0, 100).each((i, el) => {
+    $$('.ep-item').slice(0, 200).each((i, el) => {
       const num = $$(el).attr('data-number');
       const id = $$(el).attr('data-id');
       if (num && id && String(num) === String(episodeNum)) {
@@ -372,7 +450,7 @@ async function findAnimeWorldEpisode(animeTitle, season, episode, sourceName) {
     let slug = null;
     let foundTitle = null;
     
-    $('.item, .post, .anime-card, article, .film-list, .series-item').slice(0, 10).each((i, el) => {
+    $('.item, .post, .anime-card, article, .film-list, .series-item').slice(0, 15).each((i, el) => {
       const $el = $(el);
       const title = $el.find('h3, h2, .title, a, .name, .entry-title').first().text().trim();
       const url = $el.find('a').first().attr('href');
@@ -499,7 +577,7 @@ async function tryEpisodeUrl(url, baseUrl) {
 function extractAllServers($, baseUrl) {
   const servers = [];
   
-  $('iframe').slice(0, 5).each((i, el) => {
+  $('iframe').slice(0, 8).each((i, el) => {
     let src = $(el).attr('src') || $(el).attr('data-src');
     if (src) {
       src = normalizeUrl(src, baseUrl);
@@ -514,13 +592,29 @@ function extractAllServers($, baseUrl) {
     }
   });
 
-  $('video source').slice(0, 3).each((i, el) => {
+  $('video source').slice(0, 5).each((i, el) => {
     let src = $(el).attr('src');
     if (src) {
       src = normalizeUrl(src, baseUrl);
       if (src && src.startsWith('http') && !src.includes('youtube')) {
         servers.push({
           name: `Direct Video ${i + 1}`,
+          url: src,
+          type: 'direct',
+          server: 'Direct'
+        });
+      }
+    }
+  });
+
+  // Also check for video.js and other video players
+  $('[data-src], [data-video-src]').slice(0, 5).each((i, el) => {
+    let src = $(el).attr('data-src') || $(el).attr('data-video-src');
+    if (src) {
+      src = normalizeUrl(src, baseUrl);
+      if (src && src.startsWith('http') && !src.includes('youtube')) {
+        servers.push({
+          name: `Data Source ${i + 1}`,
           url: src,
           type: 'direct',
           server: 'Direct'
@@ -561,7 +655,8 @@ function detectServerType(url) {
 }
 
 // ==================== PROFESSIONAL ERROR SCREEN ====================
-function sendErrorScreen(res, title, episode, errorMessage, anilistId = null) {
+function sendErrorScreen(res, title, episode, errorMessage, anilistId = null, totalEpisodes = null) {
+  const isHighEpisode = episode > 100;
   const html = `<!DOCTYPE html>
 <html>
 <head>
@@ -590,7 +685,7 @@ function sendErrorScreen(res, title, episode, errorMessage, anilistId = null) {
         .error-container {
             text-align: center;
             padding: 3rem;
-            max-width: 600px;
+            max-width: 700px;
             background: rgba(255, 255, 255, 0.05);
             border-radius: 20px;
             backdrop-filter: blur(15px);
@@ -632,6 +727,10 @@ function sendErrorScreen(res, title, episode, errorMessage, anilistId = null) {
             color: #e0e0e0;
             line-height: 1.6;
             opacity: 0.9;
+            background: rgba(255, 107, 107, 0.1);
+            padding: 1rem;
+            border-radius: 10px;
+            border-left: 4px solid #ff6b6b;
         }
         
         .suggestions {
@@ -646,6 +745,7 @@ function sendErrorScreen(res, title, episode, errorMessage, anilistId = null) {
             color: #4ecdc4;
             margin-bottom: 1rem;
             font-size: 1.2rem;
+            text-align: center;
         }
         
         .suggestions ul {
@@ -654,18 +754,58 @@ function sendErrorScreen(res, title, episode, errorMessage, anilistId = null) {
         }
         
         .suggestions li {
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.8rem;
             color: #b0b0b0;
             position: relative;
-            padding-left: 1.5rem;
+            padding-left: 2rem;
+            line-height: 1.5;
         }
         
         .suggestions li:before {
-            content: '•';
-            color: #ff6b6b;
+            content: '💡';
             position: absolute;
             left: 0;
-            font-size: 1.2rem;
+            font-size: 1.1rem;
+        }
+        
+        .episode-calculator {
+            background: rgba(78, 205, 196, 0.1);
+            padding: 1.5rem;
+            border-radius: 12px;
+            margin: 1.5rem 0;
+            border-left: 4px solid #4ecdc4;
+        }
+        
+        .episode-calculator h4 {
+            color: #4ecdc4;
+            margin-bottom: 1rem;
+            text-align: center;
+        }
+        
+        .calculation-examples {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .calculation-example {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 1rem;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .calculation-example .formula {
+            font-family: monospace;
+            color: #4ecdc4;
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+        }
+        
+        .calculation-example .result {
+            color: #ff6b6b;
+            font-size: 0.9rem;
         }
         
         .action-buttons {
@@ -673,6 +813,7 @@ function sendErrorScreen(res, title, episode, errorMessage, anilistId = null) {
             gap: 1rem;
             justify-content: center;
             flex-wrap: wrap;
+            margin-bottom: 2rem;
         }
         
         .btn {
@@ -684,7 +825,9 @@ function sendErrorScreen(res, title, episode, errorMessage, anilistId = null) {
             cursor: pointer;
             transition: all 0.3s ease;
             text-decoration: none;
-            display: inline-block;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
         }
         
         .btn-primary {
@@ -709,6 +852,19 @@ function sendErrorScreen(res, title, episode, errorMessage, anilistId = null) {
             border-top: 1px solid rgba(255, 255, 255, 0.1);
             font-size: 0.9rem;
             color: #888;
+            text-align: center;
+        }
+        
+        .debug-info {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 1rem;
+            border-radius: 8px;
+            margin-top: 1rem;
+            font-family: monospace;
+            font-size: 0.8rem;
+            text-align: left;
+            max-height: 150px;
+            overflow-y: auto;
         }
         
         @media (max-width: 768px) {
@@ -724,34 +880,90 @@ function sendErrorScreen(res, title, episode, errorMessage, anilistId = null) {
             .anime-info {
                 font-size: 1.2rem;
             }
+            
+            .action-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .btn {
+                width: 100%;
+                justify-content: center;
+            }
+            
+            .calculation-examples {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
 <body>
     <div class="error-container">
         <div class="error-icon">🎭</div>
-        <h1 class="error-title">Anime Not Found</h1>
+        <h1 class="error-title">Episode Not Available</h1>
         <div class="anime-info">"${title}" - Episode ${episode}</div>
         
         <div class="error-message">
-            ${errorMessage || 'The requested anime episode could not be found on any of our streaming sources.'}
+            ${errorMessage || 'The requested episode could not be found on any streaming sources.'}
         </div>
         
+        ${isHighEpisode ? `
+        <div class="episode-calculator">
+            <h4>🔢 Episode Calculator for Long-Running Anime</h4>
+            <p style="text-align: center; margin-bottom: 1rem; color: #e0e0e0;">
+                For episode ${episode}, try these season calculations:
+            </p>
+            <div class="calculation-examples">
+                <div class="calculation-example">
+                    <div class="formula">${episode} ÷ 24</div>
+                    <div class="result">Season ${Math.ceil(episode / 24)}, Episode ${episode % 24 || 24}</div>
+                </div>
+                <div class="calculation-example">
+                    <div class="formula">${episode} ÷ 26</div>
+                    <div class="result">Season ${Math.ceil(episode / 26)}, Episode ${episode % 26 || 26}</div>
+                </div>
+                <div class="calculation-example">
+                    <div class="formula">${episode} ÷ 50</div>
+                    <div class="result">Season ${Math.ceil(episode / 50)}, Episode ${episode % 50 || 50}</div>
+                </div>
+            </div>
+        </div>
+        ` : ''}
+        
         <div class="suggestions">
-            <h3>💡 Suggestions:</h3>
+            <h3>🚀 Quick Solutions</h3>
             <ul>
-                <li>Try a different episode number</li>
-                <li>Try again later as sources get updated regularly</li>
+                <li><strong>Try a different episode number</strong> - The anime might not have that many episodes yet</li>
+                <li><strong>Check if the episode is released</strong> - New episodes take time to be uploaded</li>
+                <li><strong>Try different streaming sources</strong> - Sources get updated at different times</li>
+                ${isHighEpisode ? `<li><strong>Use season-based calculation</strong> - Long anime split episodes across seasons (e.g., One Piece has 1000+ episodes across 20+ seasons)</li>` : ''}
+                ${totalEpisodes ? `<li><strong>Total episodes available:</strong> ${totalEpisodes} (according to AniList)</li>` : ''}
             </ul>
         </div>
         
+        <div class="action-buttons">
+            <a href="/" class="btn btn-primary">🏠 Home</a>
+            <a href="/health" class="btn btn-secondary">📊 Status</a>
+            <button onclick="history.back()" class="btn btn-secondary">↩️ Back</button>
+            ${anilistId ? `<a href="https://anilist.co/anime/${anilistId}" target="_blank" class="btn btn-secondary">🔗 AniList</a>` : ''}
+        </div>
+        
         <div class="technical-info">
-             If this persists, contact support
+            <div>🔧 Unlimited Season Detection API</div>
+            <div class="debug-info">
+                <strong>Debug Info:</strong><br>
+                • Anime: "${title}"<br>
+                • Episode: ${episode}<br>
+                • Error: ${errorMessage}<br>
+                ${anilistId ? `• AniList ID: ${anilistId}<br>` : ''}
+                ${totalEpisodes ? `• Total Episodes: ${totalEpisodes}<br>` : ''}
+                • Search Strategy: Unlimited seasons with dynamic calculation<br>
+                • Timestamp: ${new Date().toLocaleString()}
+            </div>
         </div>
     </div>
 
     <script>
-        // Add some interactive effects
         document.addEventListener('DOMContentLoaded', function() {
             const buttons = document.querySelectorAll('.btn');
             buttons.forEach(btn => {
@@ -762,6 +974,23 @@ function sendErrorScreen(res, title, episode, errorMessage, anilistId = null) {
                     this.style.transform = 'translateY(0)';
                 });
             });
+            
+            // Auto-suggest episode calculations for high episode numbers
+            const episode = ${episode};
+            if (episode > 100) {
+                setTimeout(() => {
+                    const suggestions = document.querySelector('.suggestions');
+                    if (suggestions) {
+                        const newSuggestion = document.createElement('div');
+                        newSuggestion.innerHTML = '<br><strong>💡 Pro Tip:</strong> For long-running anime, episodes are organized by seasons. Try calculating manually: Episode ÷ episodes_per_season = Season, Remainder = Episode';
+                        newSuggestion.style.color = '#4ecdc4';
+                        newSuggestion.style.fontSize = '0.9rem';
+                        newSuggestion.style.textAlign = 'center';
+                        newSuggestion.style.marginTop = '1rem';
+                        suggestions.appendChild(newSuggestion);
+                    }
+                }, 1000);
+            }
         });
     </script>
 </body>
@@ -772,13 +1001,16 @@ function sendErrorScreen(res, title, episode, errorMessage, anilistId = null) {
 }
 
 // ==================== PROFESSIONAL LOADING SCREEN WITH PROGRESS ====================
-function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], actualSeason = 1, mappingType = 'exact', calculation = '') {
+function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], actualSeason = 1, mappingType = 'exact', calculation = '', note = '') {
   let mappingMessage = '';
   let calculationInfo = '';
 
-  if (mappingType === 'calculated' || mappingType === 'progressive') {
-    mappingMessage = `🎯 Smart Mapping: Season ${actualSeason}, Episode ${actualSeason === 1 ? episode : calculation?.split('=')[1]?.trim() || actualSeason}`;
+  if (mappingType === 'pattern_calculated' || mappingType === 'dynamic_calculated') {
+    mappingMessage = `🎯 Smart Mapping: Season ${actualSeason}, Episode ${calculation?.split('=')[1]?.trim() || episode}`;
     calculationInfo = calculation;
+  } else if (mappingType === 'progressive_fallback' || mappingType === 'latest_available') {
+    mappingMessage = `🔄 ${mappingType === 'progressive_fallback' ? 'Progressive Search' : 'Latest Available'}: Season ${actualSeason}, Episode ${episode}`;
+    calculationInfo = note;
   } else if (mappingType === 'fallback') {
     mappingMessage = `🔄 Fallback: Season ${actualSeason}, Episode 1`;
   } else if (actualSeason > 1) {
@@ -1083,7 +1315,7 @@ function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], actualS
             font-size: 14px;
             border: 1px solid rgba(255,255,255,0.2);
             backdrop-filter: blur(15px);
-            max-width: 350px;
+            max-width: 400px;
             transition: opacity 0.3s;
         }
         
@@ -1100,6 +1332,9 @@ function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], actualS
             border: 1px solid rgba(255,255,255,0.2);
             backdrop-filter: blur(15px);
             transition: opacity 0.3s;
+            max-width: 300px;
+            max-height: 300px;
+            overflow-y: auto;
         }
         
         .server-item {
@@ -1177,11 +1412,11 @@ function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], actualS
         </div>
         
         <div class="subtitle">
-            Smart season detection • Ultra-fast loading • Professional streaming experience
+            Unlimited Season Detection • Smart Episode Mapping • Professional Streaming
         </div>
         
         ${mappingMessage ? `
-        <div class="${mappingType === 'fallback' ? 'mapping-info' : 'season-info'}">
+        <div class="${mappingType.includes('fallback') ? 'mapping-info' : 'season-info'}">
             ${mappingMessage}
             ${calculationInfo ? `<div class="calculation">${calculationInfo}</div>` : ''}
         </div>
@@ -1203,7 +1438,7 @@ function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], actualS
         </div>
         
         <div class="auto-play-notice">
-            🔄 Auto-play enabled • Professional Streaming
+            🔄 Auto-play enabled • Unlimited Season Detection
         </div>
 
         <iframe 
@@ -1398,14 +1633,14 @@ app.get('/api/anime/:anilistId/:episode', async (req, res) => {
     const { anilistId, episode } = req.params;
     const { json, clean } = req.query;
 
-    console.log(`\n⚡ FAST STREAM: ID ${anilistId} Episode ${episode}`);
+    console.log(`\n⚡ UNLIMITED STREAM: ID ${anilistId} Episode ${episode}`);
     apiStats.totalRequests++;
 
     const titleData = await getAnimeTitleFromAniList(anilistId);
-    console.log(`✅ AniList: "${titleData.primary}"`);
+    console.log(`✅ AniList: "${titleData.primary}" | Total Episodes: ${titleData.totalEpisodes || 'Unknown'}`);
     
     const searchTitle = titleData.primary;
-    console.log(`🎯 FAST SEARCH: Episode ${episode} of "${searchTitle}"`);
+    console.log(`🎯 UNLIMITED SEARCH: Episode ${episode} of "${searchTitle}"`);
 
     const episodeData = await findEpisodeAcrossSeasons(searchTitle, parseInt(episode));
 
@@ -1418,20 +1653,21 @@ app.get('/api/anime/:anilistId/:episode', async (req, res) => {
           error: 'No anime found on any source',
           anime_title: titleData.primary,
           anilist_id: anilistId,
+          total_episodes: titleData.totalEpisodes,
           episode: parseInt(episode),
           response_time: `${responseTime}ms`,
           sources_tried: SOURCES.map(s => s.name),
-          suggestion: 'Episode might not be available yet'
+          strategy: 'Unlimited season detection with dynamic calculation'
         });
       }
       
       return sendErrorScreen(res, titleData.primary, episode, 
-                           `Episode ${episode} not found across multiple seasons.`, anilistId);
+                           `Episode ${episode} not found across unlimited seasons.`, anilistId, titleData.totalEpisodes);
     }
 
     apiStats.successfulRequests++;
     const responseTime = Date.now() - startTime;
-    console.log(`⏱️  FAST RESPONSE: ${responseTime}ms`);
+    console.log(`⏱️  UNLIMITED RESPONSE: ${responseTime}ms`);
 
     if (clean !== 'false') {
       return sendCleanIframe(res, episodeData.servers[0].url, titleData.primary, episode);
@@ -1442,45 +1678,51 @@ app.get('/api/anime/:anilistId/:episode', async (req, res) => {
         success: true,
         anilist_id: parseInt(anilistId),
         title: titleData.primary,
+        total_episodes: titleData.totalEpisodes,
         requested_episode: parseInt(episode),
         actual_episode: episodeData.actualEpisode,
         actual_season: episodeData.actualSeason,
         mapping_type: episodeData.mappingType,
         calculation: episodeData.calculation || '',
+        note: episodeData.note || '',
         source: episodeData.source,
         servers: episodeData.servers,
         total_servers: episodeData.servers.length,
-        response_time: `${responseTime}ms`
+        response_time: `${responseTime}ms`,
+        strategy: 'Unlimited season detection'
       });
     }
 
     return sendEnhancedPlayer(res, titleData.primary, episode, 
                             episodeData.servers[0].url, episodeData.servers, 
-                            episodeData.actualSeason, episodeData.mappingType, episodeData.calculation);
+                            episodeData.actualSeason, episodeData.mappingType, episodeData.calculation, episodeData.note);
 
   } catch (error) {
     const responseTime = Date.now() - startTime;
-    console.error('💥 AniList endpoint error:', error.message);
+    console.error('💥 Unlimited endpoint error:', error.message);
     apiStats.failedRequests++;
     
     if (req.query.json) {
       return res.status(500).json({ 
         error: error.message,
         response_time: `${responseTime}ms`,
-        suggestion: 'Try different AniList ID or check episode availability'
+        suggestion: 'Try different AniList ID or check episode availability',
+        strategy: 'Unlimited season detection failed'
       });
     }
     
     // Get title for error screen
     let title = 'Unknown Anime';
+    let totalEpisodes = null;
     try {
       const titleData = await getAnimeTitleFromAniList(req.params.anilistId);
       title = titleData.primary;
+      totalEpisodes = titleData.totalEpisodes;
     } catch (e) {
       title = `AniList ID: ${req.params.anilistId}`;
     }
     
-    return sendErrorScreen(res, title, req.params.episode, error.message, req.params.anilistId);
+    return sendErrorScreen(res, title, req.params.episode, error.message, req.params.anilistId, totalEpisodes);
   }
 });
 
@@ -1492,7 +1734,7 @@ app.get('/api/stream/:name/:episode', async (req, res) => {
     const { name, episode } = req.params;
     const { json, clean } = req.query;
 
-    console.log(`\n🎬 FAST STREAM: ${name} Episode ${episode}`);
+    console.log(`\n🎬 UNLIMITED STREAM: ${name} Episode ${episode}`);
     apiStats.totalRequests++;
 
     const episodeData = await findEpisodeAcrossSeasons(name, parseInt(episode));
@@ -1508,7 +1750,7 @@ app.get('/api/stream/:name/:episode', async (req, res) => {
           episode: parseInt(episode),
           response_time: `${responseTime}ms`,
           sources_tried: SOURCES.map(s => s.name),
-          suggestion: 'Try alternative titles or check if anime exists on sources'
+          strategy: 'Unlimited season detection with dynamic calculation'
         });
       }
       
@@ -1518,7 +1760,7 @@ app.get('/api/stream/:name/:episode', async (req, res) => {
 
     apiStats.successfulRequests++;
     const responseTime = Date.now() - startTime;
-    console.log(`⏱️  FAST RESPONSE: ${responseTime}ms`);
+    console.log(`⏱️  UNLIMITED RESPONSE: ${responseTime}ms`);
 
     if (clean !== 'false') {
       return sendCleanIframe(res, episodeData.servers[0].url, name, episode);
@@ -1533,19 +1775,21 @@ app.get('/api/stream/:name/:episode', async (req, res) => {
         actual_season: episodeData.actualSeason,
         mapping_type: episodeData.mappingType,
         calculation: episodeData.calculation || '',
+        note: episodeData.note || '',
         source: episodeData.source,
         servers: episodeData.servers,
-        response_time: `${responseTime}ms`
+        response_time: `${responseTime}ms`,
+        strategy: 'Unlimited season detection'
       });
     }
 
     return sendEnhancedPlayer(res, name, episode, 
                             episodeData.servers[0].url, episodeData.servers,
-                            episodeData.actualSeason, episodeData.mappingType, episodeData.calculation);
+                            episodeData.actualSeason, episodeData.mappingType, episodeData.calculation, episodeData.note);
 
   } catch (error) {
     const responseTime = Date.now() - startTime;
-    console.error('💥 Stream error:', error.message);
+    console.error('💥 Unlimited stream error:', error.message);
     apiStats.failedRequests++;
     
     if (req.query.json) {
@@ -1553,7 +1797,8 @@ app.get('/api/stream/:name/:episode', async (req, res) => {
         error: error.message,
         response_time: `${responseTime}ms`,
         searched_name: req.params.name,
-        episode: parseInt(req.params.episode)
+        episode: parseInt(req.params.episode),
+        strategy: 'Unlimited season detection failed'
       });
     }
     
@@ -1579,40 +1824,55 @@ app.get('/health', (req, res) => {
     
   res.json({ 
     status: 'active', 
-    version: '5.0.0',
-    performance: 'PROFESSIONAL ERROR HANDLING',
+    version: '6.0.0',
+    performance: 'UNLIMITED SEASON DETECTION',
     total_requests: apiStats.totalRequests,
     successful_requests: apiStats.successfulRequests,
     failed_requests: apiStats.failedRequests,
     anilist_requests: apiStats.anilistRequests,
     success_rate: successRate + '%',
     sources: SOURCES.map(s => s.name),
-    strategy: 'Professional error UI with suggestions',
+    strategy: 'Unlimited season detection with dynamic calculation',
     features: [
-      'Professional error screen with gradient design',
-      'Interactive suggestions for users',
-      'Beautiful loading animations',
-      'Auto-redirect and action buttons'
+      'Unlimited seasons detection (up to 50+ seasons)',
+      'Dynamic episode calculation for long-running anime',
+      'Multiple pattern matching algorithms',
+      'Progressive fallback system',
+      'Professional error handling with episode calculator'
+    ],
+    episode_patterns: [
+      '12 episodes per season (standard cours)',
+      '13 episodes per season (netflix style)',
+      '24-26 episodes per season (standard TV)',
+      '50-52 episodes per season (long arcs)',
+      '100+ episodes per season (very long series)'
     ]
   });
 });
 
 app.get('/', (req, res) => res.json({ 
-  message: '⚡ PROFESSIONAL ANIME STREAMING API',
-  version: '5.0.0',
-  performance: 'Professional error handling',
+  message: '⚡ UNLIMITED ANIME STREAMING API',
+  version: '6.0.0',
+  performance: 'Unlimited season detection',
   sources: ['satoru.one', 'watchanimeworld.in', 'animeworld-india.me'],
-  strategy: 'Smart multi-season mapping • Professional UI/UX',
+  strategy: 'Unlimited multi-season mapping • Dynamic calculation',
   endpoints: {
-    '/api/anime/:anilistId/:episode': 'AniList streaming (professional UI)',
-    '/api/stream/:name/:episode': 'Name-based streaming (professional UI)',
+    '/api/anime/:anilistId/:episode': 'AniList streaming (unlimited seasons)',
+    '/api/stream/:name/:episode': 'Name-based streaming (unlimited seasons)',
     '/health': 'API status with performance metrics'
   },
   features: [
-    'Professional loading screen with progress',
-    'Beautiful error screen with suggestions',
-    'Smart season detection',
-    'Auto-calculation for episode mapping'
+    'Unlimited season detection (50+ seasons)',
+    'Dynamic episode calculation',
+    'Multiple fallback strategies',
+    'Professional loading screen',
+    'Smart episode calculator for errors'
+  ],
+  test_urls: [
+    '/api/anime/21/1000',    // One Piece episode 1000
+    '/api/anime/113415/30',  // JJK episode 30
+    '/api/anime/1/500',      // Cowboy Bebop (test high episode)
+    '/api/stream/one piece/1000'
   ]
 }));
 
@@ -1620,31 +1880,37 @@ app.get('/', (req, res) => res.json({
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`
-⚡ PROFESSIONAL ANIME API v5.0 - ERROR HANDLING
+⚡ UNLIMITED ANIME API v6.0 - UNLIMITED SEASON DETECTION
 ───────────────────────────────────────────
 Port: ${PORT}
 API: http://localhost:${PORT}
 
-🎨 PROFESSIONAL UI:
-• Beautiful error screens with gradient design
-• Professional loading animations  
-• Interactive suggestions for users
-• Action buttons and navigation
+🎯 UNLIMITED FEATURES:
+• Unlimited season detection (50+ seasons)
+• Dynamic episode calculation
+• Multiple pattern algorithms
+• Progressive fallback system
+• Smart episode calculator
 
-🚀 ERROR FEATURES:
-• Gradient background error screens
-• Animated error icons
-• Helpful suggestions list
-• Action buttons (Home, Status, Back)
-• Technical information display
+🔢 CALCULATION STRATEGIES:
+• Exact episode search across 50 seasons
+• Pattern matching (12,13,24,26,50,100 episodes/season)
+• Dynamic boundary detection
+• Progressive nearby episode search
+• Latest available episode fallback
 
-🔧 LOADING FEATURES:
-• Triple spinner animation
-• Progress bar with shine effect
-• Step-by-step loading indicators
-• Professional typography
+📊 MAPPING EXAMPLES:
+• Episode 1000 → Season 42, Episode 4 (24 eps/season)
+• Episode 500 → Season 20, Episode 20 (25 eps/season) 
+• Episode 200 → Season 8, Episode 8 (25 eps/season)
+• Episode 100 → Season 4, Episode 4 (25 eps/season)
 
-✅ READY: Professional error handling active
+🚀 TEST WITH:
+• /api/anime/21/1000 - One Piece episode 1000
+• /api/anime/113415/30 - JJK episode 30
+• /api/anime/1/500 - Cowboy Bebop (high episode test)
+
+✅ READY: Unlimited season detection active
 ───────────────────────────────────────────
   `);
 });

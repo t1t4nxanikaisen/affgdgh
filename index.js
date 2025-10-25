@@ -18,15 +18,87 @@ let apiStats = {
 // AniList GraphQL API
 const ANILIST_API = 'https://graphql.anilist.co';
 
-// Available providers with new names
+// ==================== UPDATE PROVIDER LIST ====================
 const PROVIDERS = [
-  { id: 'satoru', name: 'Gojo', baseUrl: 'https://satoru.one' },
-  { id: 'watchanimeworld', name: 'Geto', baseUrl: 'https://watchanimeworld.in' },
-  { id: 'animedub', name: 'Luffy', baseUrl: 'https://animedub.co' },
-  { id: 'animeworldindia', name: 'Yuji', baseUrl: 'https://animeworld-india.me' }
+  { 
+    id: 'satoru', 
+    name: 'Gojo', 
+    baseUrl: 'https://satoru.one',
+    priority: 1,
+    enabled: true
+  },
+  { 
+    id: 'watchanimeworld', 
+    name: 'Geto', 
+    baseUrl: 'https://watchanimeworld.in',
+    priority: 2,
+    enabled: true
+  },
+  { 
+    id: 'toonstream', 
+    name: 'Luffy', 
+    baseUrl: 'https://toonstream.love',
+    priority: 3,
+    enabled: true
+  },
+  { 
+    id: 'animeworldindia', 
+    name: 'Yuji', 
+    baseUrl: 'https://animeworld-india.me',
+    priority: 4,
+    enabled: true
+  },
+  { 
+    id: 'animesalt', 
+    name: 'AnimeSalt', 
+    baseUrl: 'https://animesalt.cc',
+    priority: 5,
+    enabled: true
+  }
 ];
 
-// ==================== HELPER FUNCTIONS ====================
+// ==================== ADVANCED CACHE SYSTEM ====================
+const searchCache = new Map();
+const episodeCache = new Map();
+
+function cacheKey(animeTitle, episode, provider = '') {
+  return `${provider}:${animeTitle.toLowerCase().trim()}:${episode}`;
+}
+
+function setCache(key, data, ttl = 15 * 60 * 1000) {
+  searchCache.set(key, {
+    data,
+    expiry: Date.now() + ttl
+  });
+}
+
+function getCache(key) {
+  const item = searchCache.get(key);
+  if (item && item.expiry > Date.now()) {
+    return item.data;
+  }
+  searchCache.delete(key);
+  return null;
+}
+
+// ==================== ENHANCED HEADERS & UTILITIES ====================
+function getEnhancedHeaders(referer = 'https://google.com') {
+  return {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive',
+    'Referer': referer,
+    'Cache-Control': 'max-age=0',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'DNT': '1',
+    'Upgrade-Insecure-Requests': '1'
+  };
+}
+
 function detectServerType(urlOrName) {
   const text = (urlOrName || '').toLowerCase();
   if (text.includes('streamtape')) return 'StreamTape';
@@ -36,31 +108,36 @@ function detectServerType(urlOrName) {
   if (text.includes('vidstream')) return 'VidStream';
   if (text.includes('voe')) return 'Voe';
   if (text.includes('satoru')) return 'Gojo';
-  if (text.includes('animedub')) return 'Luffy';
+  if (text.includes('toonstream')) return 'Luffy';
   if (text.includes('animeworld-india')) return 'Yuji';
   if (text.includes('watchanimeworld')) return 'Geto';
+  if (text.includes('animesalt')) return 'AnimeSalt';
+  if (text.includes('m3u8')) return 'HLS';
+  if (text.includes('mp4')) return 'MP4';
   return 'Direct';
 }
 
 function detectQualityFromUrl(url) {
   const urlLower = url.toLowerCase();
   
-  if (urlLower.includes('1080')) return '1080p';
-  if (urlLower.includes('720')) return '720p';
-  if (urlLower.includes('480')) return '480p';
-  if (urlLower.includes('360')) return '360p';
+  if (urlLower.includes('1080') || urlLower.includes('1920x1080')) return '1080p';
+  if (urlLower.includes('720') || urlLower.includes('1280x720')) return '720p';
+  if (urlLower.includes('480') || urlLower.includes('854x480')) return '480p';
+  if (urlLower.includes('360') || urlLower.includes('640x360')) return '360p';
   if (urlLower.includes('hd')) return '720p';
   if (urlLower.includes('fullhd')) return '1080p';
   if (urlLower.includes('.m3u8')) return 'Adaptive';
   
-  return 'Unknown';
+  return 'Auto';
 }
 
 function isBlockedSource(url) {
   const blockedPatterns = [
     'youtube.com', 'youtu.be', 'facebook.com', 'twitter.com',
     'instagram.com', '/ads/', 'trailer', 'preview', 'promo',
-    'analytics', 'tracking', 'google.com'
+    'analytics', 'tracking', 'google.com', 'doubleclick.net',
+    'googleads', 'adsystem', 'adservice', 'popads.net',
+    'banner', 'adserver', 'googlesyndication'
   ];
   
   return blockedPatterns.some(pattern => url.toLowerCase().includes(pattern));
@@ -82,7 +159,6 @@ function normalizeUrl(url, baseUrl) {
 function removeDuplicateServers(servers) {
   const seen = new Set();
   return servers.filter(server => {
-    // Normalize URL for comparison
     const normalizedUrl = server.url.split('?')[0].split('#')[0];
     const key = normalizedUrl + server.type;
     
@@ -92,19 +168,7 @@ function removeDuplicateServers(servers) {
   });
 }
 
-function getHeaders(referer = 'https://google.com') {
-  return {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Connection': 'keep-alive',
-    'Referer': referer,
-    'Cache-Control': 'max-age=0'
-  };
-}
-
-// ==================== STEP 1: GET ANIME TITLE FROM ANILIST ====================
+// ==================== ANILIST INTEGRATION ====================
 async function getAnimeTitleFromAniList(anilistId) {
   try {
     apiStats.anilistRequests++;
@@ -155,53 +219,320 @@ async function getAnimeTitleFromAniList(anilistId) {
   }
 }
 
-// ==================== STEP 2: TRY ANIMEWORLD-INDIA.ME (Yuji) - SEARCH FIRST ====================
-async function searchAnimeWorldIndia(animeTitle) {
-  try {
-    const searchUrl = `https://animeworld-india.me/?s=${encodeURIComponent(animeTitle)}`;
-    const response = await axios.get(searchUrl, { 
-      headers: getHeaders(),
-      timeout: 8000 
-    });
-    const $ = load(response.data);
+// ==================== PROVIDER FUNCTIONS (keeping existing ones) ====================
+async function tryAnimeSalt(animeTitle, episode, useCache = true) {
+  const cacheKey = `animesalt:${animeTitle}:${episode}`;
+  
+  if (useCache) {
+    const cached = getCache(cacheKey);
+    if (cached) return cached;
+  }
 
-    let correctSlug = null;
+  try {
+    console.log(`🔍 [AnimeSalt] Searching: ${animeTitle} Episode ${episode}`);
     
-    // Look for the anime in search results and extract the correct URL slug
-    $('.flw-item, [href*="/series/"]').each((i, el) => {
-      let url = $(el).attr('href');
-      if (url && url.includes('/series/')) {
-        // Extract the slug from the series page URL
-        const seriesMatch = url.match(/series\/([^\/]+)/);
-        if (seriesMatch) {
-          correctSlug = seriesMatch[1];
-          console.log(`✅ Found correct slug: ${correctSlug}`);
-          return false; // Break the loop after first good match
-        }
+    const searchUrl = `https://animesalt.cc/?s=${encodeURIComponent(animeTitle)}`;
+    const searchResponse = await axios.get(searchUrl, {
+      headers: getEnhancedHeaders('https://animesalt.cc'),
+      timeout: 8000
+    });
+
+    const $ = load(searchResponse.data);
+    
+    let seriesUrl = null;
+    let seriesSlug = null;
+
+    $('a[href*="/series/"]').each((i, el) => {
+      const href = $(el).attr('href');
+      const title = $(el).text().trim();
+      
+      if (href && title.toLowerCase().includes(animeTitle.toLowerCase())) {
+        seriesUrl = href;
+        return false;
       }
     });
+
+    if (!seriesUrl) {
+      const cleanSlug = animeTitle.toLowerCase()
+        .replace(/[^\w\s]/g, '')
+        .replace(/\s+/g, '-');
+      seriesUrl = `https://animesalt.cc/series/${cleanSlug}/`;
+    }
+
+    const slugMatch = seriesUrl.match(/\/series\/([^\/]+)/);
+    if (slugMatch) {
+      seriesSlug = slugMatch[1];
+    } else {
+      throw new Error('Could not extract series slug');
+    }
+
+    const episodeUrl = `https://animesalt.cc/episode/${seriesSlug}-1x${episode}/`;
     
-    return correctSlug;
+    const episodeResponse = await axios.get(episodeUrl, {
+      headers: getEnhancedHeaders(seriesUrl),
+      timeout: 8000,
+      validateStatus: null
+    });
+
+    if (episodeResponse.status !== 200) {
+      throw new Error('Episode page not found');
+    }
+
+    const $$ = load(episodeResponse.data);
+    const servers = extractAnimeSaltServers($$, episodeUrl);
+    
+    if (servers.length === 0) {
+      throw new Error('No servers found on episode page');
+    }
+
+    const episodeData = {
+      url: servers[0].url,
+      servers: servers,
+      source: 'animesalt.cc',
+      provider: 'animesalt',
+      episode: episode,
+      valid: true,
+      cached: false
+    };
+
+    setCache(cacheKey, episodeData);
+    return episodeData;
+
   } catch (err) {
-    console.error(`💥 Search error: ${err.message}`);
-    return null;
+    console.error(`💥 animesalt.cc error: ${err.message}`);
+    throw err;
   }
 }
 
-async function tryAnimeWorldIndia(animeTitle, episode) {
-  try {
-    console.log(`🔍 Trying animeworld-india.me (Yuji): ${animeTitle} Episode ${episode}`);
+function extractAnimeSaltServers($, baseUrl) {
+  const servers = [];
+  
+  $('.server, [class*="server"], [data-server]').each((i, el) => {
+    const serverText = $(el).text().toLowerCase();
+    let serverName = 'Server ' + (i + 1);
     
-    // STEP 1: Search for the correct title slug
-    const correctSlug = await searchAnimeWorldIndia(animeTitle);
-    if (!correctSlug) throw new Error('Anime not found in search results');
+    if (serverText.includes('server 1') || serverText.includes('play')) {
+      serverName = 'Server Play';
+    } else if (serverText.includes('server 2') || serverText.includes('abyss')) {
+      serverName = 'Server Abyss';
+    }
+    
+    let iframeSrc = $(el).find('iframe').attr('src');
+    if (!iframeSrc) {
+      iframeSrc = $(el).attr('data-src') || $(el).attr('data-video') || $(el).find('a').attr('data-video');
+    }
+    
+    if (iframeSrc) {
+      const fullUrl = normalizeUrl(iframeSrc, baseUrl);
+      if (fullUrl && !isBlockedSource(fullUrl)) {
+        servers.push({
+          name: serverName,
+          url: fullUrl,
+          type: 'iframe',
+          server: detectServerType(fullUrl),
+          quality: detectQualityFromUrl(fullUrl),
+          priority: i
+        });
+      }
+    }
+  });
 
-    // STEP 2: Build the episode URL using the official format
-    const episodeUrl = `https://animeworld-india.me/episode/${correctSlug}-1x${episode}`;
-    console.log(`🔗 Episode URL: ${episodeUrl}`);
+  $('iframe').each((i, el) => {
+    let src = $(el).attr('src') || $(el).attr('data-src');
+    if (src) {
+      src = normalizeUrl(src, baseUrl);
+      if (src && !isBlockedSource(src)) {
+        servers.push({
+          name: `Embed ${i + 1}`,
+          url: src,
+          type: 'iframe',
+          server: detectServerType(src),
+          quality: detectQualityFromUrl(src),
+          priority: 10 + i
+        });
+      }
+    }
+  });
+
+  const scriptContent = $('script').text();
+  const videoPatterns = [
+    /(https?:[^"']*\.m3u8[^"']*)/gi,
+    /(https?:[^"']*\.mp4[^"']*)/gi,
+    /file:\s*["'](https?:[^"']*)["']/gi,
+    /src:\s*["'](https?:[^"']*)["']/gi,
+    /videoUrl:\s*["'](https?:[^"']*)["']/gi
+  ];
+
+  videoPatterns.forEach(pattern => {
+    const matches = scriptContent.match(pattern);
+    if (matches) {
+      matches.forEach((url, i) => {
+        const cleanUrl = url.replace(/['"]/g, '')
+          .replace(/file:\s*/, '')
+          .replace(/src:\s*/, '')
+          .replace(/videoUrl:\s*/, '')
+          .trim();
+        
+        if (cleanUrl.includes('http') && !isBlockedSource(cleanUrl)) {
+          servers.push({
+            name: `Direct Stream ${servers.length + 1}`,
+            url: cleanUrl,
+            type: 'direct',
+            server: 'JavaScript',
+            quality: detectQualityFromUrl(cleanUrl),
+            priority: 20 + i
+          });
+        }
+      });
+    }
+  });
+
+  const uniqueServers = removeDuplicateServers(servers);
+  uniqueServers.sort((a, b) => a.priority - b.priority);
+  
+  return uniqueServers;
+}
+
+// ==================== OTHER PROVIDER FUNCTIONS (simplified for brevity) ====================
+async function tryToonstream(animeTitle, episode, useCache = true) {
+  const cacheKey = `toonstream:${animeTitle}:${episode}`;
+  if (useCache) {
+    const cached = getCache(cacheKey);
+    if (cached) return cached;
+  }
+
+  try {
+    const searchUrl = `https://toonstream.love/?s=${encodeURIComponent(animeTitle)}`;
+    const searchResponse = await axios.get(searchUrl, {
+      headers: getEnhancedHeaders('https://toonstream.love'),
+      timeout: 8000
+    });
+
+    const $ = load(searchResponse.data);
+    
+    let animeUrl = null;
+    let bestMatch = null;
+
+    $('.film_list-wrap .film-detail, .flw-item, [href*="/series/"]').each((i, el) => {
+      const name = $(el).find('.film-name, .dynamic-name, .film-title, h3, h4').text().trim() || $(el).text().trim();
+      let url = $(el).attr('href') || $(el).find('a').attr('href');
+      
+      if (name && url && name.toLowerCase().includes(animeTitle.toLowerCase())) {
+        if (url && !url.startsWith('http')) {
+          url = `https://toonstream.love${url.startsWith('/') ? url : '/' + url}`;
+        }
+        if (url && url.includes('/series/')) {
+          animeUrl = url;
+          bestMatch = name;
+          return false;
+        }
+      }
+    });
+
+    if (!animeUrl) throw new Error('Anime not found in search results');
+
+    const seriesMatch = animeUrl.match(/\/series\/([^\/]+)/);
+    if (!seriesMatch) throw new Error('Could not extract series slug');
+    
+    const seriesSlug = seriesMatch[1].replace(/\/$/, '');
+    const episodeUrl = `https://toonstream.love/episode/${seriesSlug}-1x${episode}/`;
+    
+    const episodeResponse = await axios.get(episodeUrl, {
+      headers: getEnhancedHeaders(animeUrl),
+      timeout: 8000,
+      validateStatus: null
+    });
+
+    if (episodeResponse.status !== 200) {
+      throw new Error('Episode page not found');
+    }
+
+    const $$ = load(episodeResponse.data);
+    const servers = await extractEnhancedToonstreamServers($$, episodeUrl);
+    
+    if (servers.length === 0) {
+      throw new Error('No servers found');
+    }
+
+    const episodeData = {
+      url: servers[0].url,
+      servers: servers,
+      source: 'toonstream.love',
+      provider: 'toonstream',
+      episode: episode,
+      valid: true,
+      cached: false
+    };
+
+    setCache(cacheKey, episodeData);
+    return episodeData;
+
+  } catch (err) {
+    console.error(`💥 toonstream.love error: ${err.message}`);
+    throw err;
+  }
+}
+
+async function extractEnhancedToonstreamServers($$, baseUrl) {
+  const servers = [];
+  
+  $$('iframe').each((i, el) => {
+    let src = $$(el).attr('src') || $$(el).attr('data-src') || $$(el).attr('data-lazy-src');
+    if (src) {
+      src = normalizeUrl(src, baseUrl);
+      if (src && src.startsWith('http') && !isBlockedSource(src)) {
+        const serverType = detectServerType(src);
+        servers.push({
+          name: `Server ${i + 1} (${serverType})`,
+          url: src,
+          type: 'iframe',
+          server: serverType,
+          quality: detectQualityFromUrl(src),
+          priority: i
+        });
+      }
+    }
+  });
+
+  $$('video source, video[src]').each((i, el) => {
+    let src = $$(el).attr('src') || $$(el).attr('data-src');
+    if (src) {
+      src = normalizeUrl(src, baseUrl);
+      if (src && src.startsWith('http') && !isBlockedSource(src)) {
+        servers.push({
+          name: `Direct Stream ${i + 1}`,
+          url: src,
+          type: 'direct',
+          server: 'Direct',
+          quality: detectQualityFromUrl(src),
+          priority: 10 + i
+        });
+      }
+    }
+  });
+
+  const uniqueServers = removeDuplicateServers(servers);
+  uniqueServers.sort((a, b) => a.priority - b.priority);
+  
+  return uniqueServers;
+}
+
+async function tryAnimeWorldIndia(animeTitle, episode, useCache = true) {
+  const cacheKey = `animeworldindia:${animeTitle}:${episode}`;
+  if (useCache) {
+    const cached = getCache(cacheKey);
+    if (cached) return cached;
+  }
+
+  try {
+    const cleanTitle = animeTitle.toLowerCase()
+      .replace(/[^\w\s]/g, '')
+      .replace(/\s+/g, '-');
+    
+    const episodeUrl = `https://animeworld-india.me/episode/${cleanTitle}-1x${episode}`;
     
     const response = await axios.get(episodeUrl, {
-      headers: getHeaders(),
+      headers: getEnhancedHeaders(),
       timeout: 8000,
       validateStatus: null
     });
@@ -209,25 +540,24 @@ async function tryAnimeWorldIndia(animeTitle, episode) {
     if (response.status !== 200) throw new Error('Episode page not found');
 
     const $ = load(response.data);
-    
-    // STEP 3: Extract servers directly from page
     const servers = extractServersDirectly($, episodeUrl);
-    
-    // STEP 4: Return only what is found - no fallbacks
-    console.log(`✅ Found ${servers.length} server(s) on animeworld-india.me`);
     
     if (servers.length === 0) {
       throw new Error('No servers found on episode page');
     }
 
-    return {
+    const result = {
       url: servers[0].url,
       servers: servers,
       source: 'animeworld-india.me',
       provider: 'animeworldindia',
       episode: episode,
-      valid: true
+      valid: true,
+      cached: false
     };
+
+    setCache(cacheKey, result);
+    return result;
 
   } catch (err) {
     console.error(`💥 animeworld-india.me error: ${err.message}`);
@@ -235,22 +565,22 @@ async function tryAnimeWorldIndia(animeTitle, episode) {
   }
 }
 
-// ==================== STEP 3: TRY WATCHANIMEWORLD.IN (Geto) ====================
-async function tryWatchAnimeWorld(animeTitle, episode) {
+async function tryWatchAnimeWorld(animeTitle, episode, useCache = true) {
+  const cacheKey = `watchanimeworld:${animeTitle}:${episode}`;
+  if (useCache) {
+    const cached = getCache(cacheKey);
+    if (cached) return cached;
+  }
+
   try {
-    console.log(`🔍 Trying watchanimeworld.in (Geto): ${animeTitle} Episode ${episode}`);
-    
-    // Clean title for URL
     const cleanTitle = animeTitle.toLowerCase()
       .replace(/[^\w\s]/g, '')
       .replace(/\s+/g, '-');
     
-    // Use single URL pattern as requested
     const url = `https://watchanimeworld.in/episode/${cleanTitle}-1x${episode}`;
-    console.log(`🔗 Direct URL: ${url}`);
     
     const response = await axios.get(url, {
-      headers: getHeaders(),
+      headers: getEnhancedHeaders(),
       timeout: 8000,
       validateStatus: null
     });
@@ -260,16 +590,19 @@ async function tryWatchAnimeWorld(animeTitle, episode) {
       const servers = extractServersDirectly($, 'https://watchanimeworld.in');
       
       if (servers.length > 0) {
-        console.log(`✅ Found on watchanimeworld.in (Geto) - ${servers.length} servers`);
-        return {
+        const result = {
           url: servers[0].url,
           servers: servers,
           source: 'watchanimeworld.in',
           provider: 'watchanimeworld',
           season: 1,
           episode: episode,
-          valid: true
+          valid: true,
+          cached: false
         };
+
+        setCache(cacheKey, result);
+        return result;
       }
     }
     
@@ -280,167 +613,81 @@ async function tryWatchAnimeWorld(animeTitle, episode) {
   }
 }
 
-// ==================== STEP 4: TRY ANIMEDUB.CO (Luffy) - DIRECT EXTRACTION ====================
-async function tryAnimedub(animeTitle, episode) {
-  try {
-    console.log(`🔍 Trying animedub.co (Luffy): ${animeTitle} Episode ${episode}`);
-    
-    // Clean title for search
-    const cleanTitle = animeTitle.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
-    const searchUrl = `https://animedub.co/search?query=${encodeURIComponent(cleanTitle)}`;
-    
-    console.log(`🔗 Searching: ${searchUrl}`);
-    
-    const searchResponse = await axios.get(searchUrl, {
-      headers: getHeaders('https://animedub.co'),
-      timeout: 10000
-    });
-
-    const $ = load(searchResponse.data);
-    let animeUrl = null;
-    let bestMatch = null;
-    
-    // Look for anime in search results
-    $('.flw-item, .film_list-wrap .film-detail, .film_list-wrap .film-name a, [href*="/series/"]').each((i, el) => {
-      const name = $(el).find('.film-name, .dynamic-name, .film-title').text().trim() || $(el).text().trim();
-      let url = $(el).attr('href') || $(el).find('a').attr('href');
-      
-      if (name && url && name.toLowerCase().includes(cleanTitle.toLowerCase())) {
-        // Ensure URL is absolute
-        if (url && !url.startsWith('http')) {
-          url = `https://animedub.co${url.startsWith('/') ? url : '/' + url}`;
-        }
-        
-        // Check if it's a series URL
-        if (url && url.includes('/series/')) {
-          animeUrl = url;
-          bestMatch = name;
-          console.log(`✅ Found match: "${bestMatch}" -> ${animeUrl}`);
-          return false;
-        }
-      }
-    });
-
-    if (!animeUrl) throw new Error('Anime not found in search results');
-
-    // Extract series ID and slug from URL
-    const seriesMatch = animeUrl.match(/series\/(\d+)\/([^\/]+)/);
-    if (!seriesMatch) throw new Error('Could not extract series info from URL');
-    
-    const seriesId = seriesMatch[1];
-    const seriesSlug = seriesMatch[2];
-    
-    console.log(`🎯 Series ID: ${seriesId}, Slug: ${seriesSlug}`);
-
-    // Build episode URL
-    const episodeUrl = `https://animedub.co/series/${seriesId}/${seriesSlug}/${episode}`;
-    console.log(`🔗 Episode URL: ${episodeUrl}`);
-    
-    const episodeResponse = await axios.get(episodeUrl, {
-      headers: getHeaders('https://animedub.co'),
-      timeout: 10000,
-      validateStatus: null
-    });
-
-    if (episodeResponse.status !== 200) {
-      throw new Error(`Episode page returned status ${episodeResponse.status}`);
-    }
-
-    const $$ = load(episodeResponse.data);
-    
-    // Extract servers directly from the page - NO AJAX CALLS
-    const servers = extractServersDirectly($$, episodeUrl);
-    
-    // If no servers found, throw error - NO FALLBACKS
-    if (servers.length === 0) {
-      throw new Error('No servers extracted from episode page');
-    }
-
-    console.log(`✅ Found ${servers.length} server options on animedub.co`);
-
-    return {
-      url: servers[0].url,
-      servers: servers,
-      source: 'animedub.co',
-      provider: 'animedub',
-      episode: episode,
-      valid: true
-    };
-
-  } catch (err) {
-    console.error(`💥 animedub.co error: ${err.message}`);
-    throw err;
+async function trySatoru(animeTitle, episode, useCache = true) {
+  const cacheKey = `satoru:${animeTitle}:${episode}`;
+  if (useCache) {
+    const cached = getCache(cacheKey);
+    if (cached) return cached;
   }
-}
 
-// ==================== STEP 5: TRY SATORU.ONE (Gojo) ====================
-async function trySatoru(animeTitle, episode) {
   try {
-    console.log(`🎯 Satoru (Gojo): Searching for "${animeTitle}" episode ${episode}`);
-    
     const cleanTitle = animeTitle.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
     const searchUrl = `https://satoru.one/filter?keyword=${encodeURIComponent(cleanTitle)}`;
     
     const searchResponse = await axios.get(searchUrl, {
-      headers: getHeaders('https://satoru.one'),
+      headers: getEnhancedHeaders('https://satoru.one'),
       timeout: 10000
     });
 
     const $ = load(searchResponse.data);
-    let animeId = null;
-    let bestMatch = null;
     
-    $('.flw-item').slice(0, 5).each((i, el) => {
-      const name = $(el).find('.film-name a').text().trim();
-      const dataId = $(el).find('.film-poster-ahref').attr('data-id');
+    let animeId = null;
+    
+    $('.flw-item, .film_list-wrap .flw-item, .movie-item').each((i, el) => {
+      const name = $(el).find('.film-name, .dynamic-name, .film-title, h3, h4').text().trim();
+      const dataId = $(el).find('.film-poster-ahref, [data-id]').attr('data-id') || 
+                    $(el).find('a').attr('href')?.match(/\/movie\/([^\/]+)/)?.[1];
       
       if (name && dataId && name.toLowerCase().includes(cleanTitle.toLowerCase())) {
         animeId = dataId;
-        bestMatch = name;
         return false;
       }
     });
 
-    if (!animeId) throw new Error(`Anime not found`);
-    console.log(`✅ Satoru found: "${bestMatch}" (ID: ${animeId})`);
+    if (!animeId) throw new Error('Anime not found in search results');
 
     const episodeUrl = `https://satoru.one/ajax/episode/list/${animeId}`;
     const episodeResponse = await axios.get(episodeUrl, {
-      headers: getHeaders('https://satoru.one'),
+      headers: getEnhancedHeaders('https://satoru.one'),
       timeout: 10000
     });
 
-    if (!episodeResponse.data.html) {
-      throw new Error('No episode list returned');
+    if (!episodeResponse.data || !episodeResponse.data.html) {
+      throw new Error('No episode list returned from server');
     }
 
     const $$ = load(episodeResponse.data.html);
-    let epId = null;
     
-    $$('.ep-item').slice(0, 100).each((i, el) => {
-      const num = $$(el).attr('data-number');
-      const id = $$(el).attr('data-id');
-      if (num && id && String(num) === String(episode)) {
-        epId = id;
+    let episodeId = null;
+    
+    $$('.ep-item, .episode-item, [data-number]').each((i, el) => {
+      const epNumber = $$(el).attr('data-number') || $$(el).find('.episode-number').text().trim();
+      const id = $$(el).attr('data-id') || $$(el).attr('id')?.replace('episode-', '');
+      
+      if (epNumber && id && parseInt(epNumber) === parseInt(episode)) {
+        episodeId = id;
         return false;
       }
     });
 
-    if (!epId) throw new Error(`Episode ${episode} not found`);
+    if (!episodeId) throw new Error(`Episode ${episode} not found in episode list`);
 
-    const serversUrl = `https://satoru.one/ajax/episode/servers?episodeId=${epId}`;
+    const serversUrl = `https://satoru.one/ajax/episode/servers?episodeId=${episodeId}`;
     const serversResponse = await axios.get(serversUrl, {
-      headers: getHeaders('https://satoru.one'),
+      headers: getEnhancedHeaders('https://satoru.one'),
       timeout: 10000
     });
 
+    if (!serversResponse.data || !serversResponse.data.html) {
+      throw new Error('No servers list returned');
+    }
+
     const $$$ = load(serversResponse.data.html);
     
-    // Extract all servers
     const allServers = [];
-    $$$('.server-item').each((i, el) => {
-      const serverId = $$$(el).attr('data-id');
-      const serverName = $$$(el).text().trim();
+    $$$('.server-item, .server-btn, [data-server]').each((i, el) => {
+      const serverId = $$$(el).attr('data-id') || $$$(el).attr('data-server');
+      const serverName = $$$(el).text().trim() || `Server ${i + 1}`;
       
       if (serverId) {
         allServers.push({
@@ -451,27 +698,36 @@ async function trySatoru(animeTitle, episode) {
       }
     });
 
-    // Try all servers quickly
-    const serverPromises = allServers.map(async (server) => {
+    if (allServers.length === 0) {
+      throw new Error('No servers available for this episode');
+    }
+
+    const serverPromises = allServers.map(async (server, index) => {
       try {
         const sourceUrl = `https://satoru.one/ajax/episode/sources?id=${server.id}`;
         const sourceResponse = await axios.get(sourceUrl, {
-          headers: getHeaders('https://satoru.one'),
+          headers: getEnhancedHeaders('https://satoru.one'),
           timeout: 8000
         });
 
         if (sourceResponse.data && sourceResponse.data.link) {
-          const iframeUrl = sourceResponse.data.link;
+          let iframeUrl = sourceResponse.data.link;
           
-          if (iframeUrl.toLowerCase().includes('youtube') || iframeUrl.toLowerCase().includes('youtu.be')) {
+          if (iframeUrl.toLowerCase().includes('youtube') || 
+              iframeUrl.toLowerCase().includes('youtu.be') ||
+              isBlockedSource(iframeUrl)) {
             return null;
           }
 
+          iframeUrl = normalizeUrl(iframeUrl, 'https://satoru.one');
+          
           return {
             name: server.name,
             url: iframeUrl,
             type: 'iframe',
-            server: server.type
+            server: server.type,
+            quality: detectQualityFromUrl(iframeUrl),
+            priority: index
           };
         }
       } catch (error) {
@@ -485,34 +741,31 @@ async function trySatoru(animeTitle, episode) {
       .map(result => result.value);
 
     if (validServers.length === 0) {
-      throw new Error('No working servers found');
+      throw new Error('No working video servers found');
     }
 
-    console.log(`🎬 Satoru found ${validServers.length} working servers`);
-
-    return {
+    const result = {
       url: validServers[0].url,
       servers: validServers,
       source: 'satoru.one',
       provider: 'satoru',
-      season: 1,
-      episode: episode,
-      valid: true
+      episode: parseInt(episode),
+      valid: true,
+      cached: false
     };
 
+    setCache(cacheKey, result);
+    return result;
+
   } catch (err) {
-    console.error(`💥 Satoru error: ${err.message}`);
+    console.error(`💥 satoru.one error: ${err.message}`);
     throw err;
   }
 }
 
-// ==================== DIRECT SERVER EXTRACTION ====================
 function extractServersDirectly($$, baseUrl) {
   const servers = [];
   
-  console.log('🎬 Extracting servers directly from page...');
-
-  // Method 1: Direct iframe extraction
   $$('iframe').each((i, el) => {
     let src = $$(el).attr('src') || $$(el).attr('data-src') || $$(el).attr('data-lazy-src');
     if (src) {
@@ -525,13 +778,11 @@ function extractServersDirectly($$, baseUrl) {
           server: detectServerType(src),
           quality: detectQualityFromUrl(src)
         });
-        console.log(`✅ Found iframe: ${src}`);
       }
     }
   });
 
-  // Method 2: Video player sources (direct video links)
-  $$('video source').each((i, el) => {
+  $$('video source, video[src]').each((i, el) => {
     let src = $$(el).attr('src');
     if (src) {
       src = normalizeUrl(src, baseUrl);
@@ -543,130 +794,547 @@ function extractServersDirectly($$, baseUrl) {
           server: 'Direct',
           quality: detectQualityFromUrl(src)
         });
-        console.log(`✅ Found direct video: ${src}`);
       }
     }
   });
 
-  // Method 3: Video tags with src attribute
-  $$('video[src]').each((i, el) => {
-    let src = $$(el).attr('src');
-    if (src) {
-      src = normalizeUrl(src, baseUrl);
-      if (src && src.startsWith('http') && !isBlockedSource(src)) {
-        servers.push({
-          name: `Video Tag ${i + 1}`,
-          url: src,
-          type: 'direct',
-          server: 'Direct',
-          quality: detectQualityFromUrl(src)
-        });
-        console.log(`✅ Found video tag: ${src}`);
-      }
-    }
-  });
-
-  // Method 4: JavaScript variable extraction
   const scriptContent = $$('script').text();
-  
-  // Extract various video URL patterns from JavaScript
   const videoPatterns = [
-    { pattern: /(https?:[^"']*\.m3u8[^"']*)/g, name: 'HLS Stream', type: 'hls' },
-    { pattern: /(https?:[^"']*\.mp4[^"']*)/g, name: 'MP4 Stream', type: 'direct' },
-    { pattern: /(https?:[^"']*\.webm[^"']*)/g, name: 'WebM Stream', type: 'direct' },
-    { pattern: /file:\s*["'](https?:[^"']*)["']/g, name: 'JS File', type: 'direct' },
-    { pattern: /src:\s*["'](https?:[^"']*)["']/g, name: 'JS Source', type: 'direct' },
-    { pattern: /videoUrl\s*=\s*["'](https?:[^"']*)["']/g, name: 'Video URL', type: 'direct' },
-    { pattern: /source\s*:\s*["'](https?:[^"']*)["']/g, name: 'Source', type: 'direct' }
+    /(https?:[^"']*\.m3u8[^"']*)/gi,
+    /(https?:[^"']*\.mp4[^"']*)/gi,
+    /file:\s*["'](https?:[^"']*)["']/gi,
+    /src:\s*["'](https?:[^"']*)["']/gi,
+    /videoUrl:\s*["'](https?:[^"']*)["']/gi
   ];
 
-  videoPatterns.forEach(({ pattern, name, type }) => {
+  videoPatterns.forEach(pattern => {
     const matches = scriptContent.match(pattern);
     if (matches) {
       matches.forEach((url, i) => {
         const cleanUrl = url.replace(/['"]/g, '')
           .replace(/file:\s*/, '')
           .replace(/src:\s*/, '')
-          .replace(/videoUrl\s*=\s*/, '')
-          .replace(/source\s*:\s*/, '');
+          .replace(/videoUrl:\s*/, '')
+          .trim();
         
         if (cleanUrl.includes('http') && !isBlockedSource(cleanUrl)) {
           servers.push({
-            name: `${name} ${i + 1}`,
+            name: `JavaScript Source ${servers.length + 1}`,
             url: cleanUrl,
-            type: type,
+            type: 'direct',
             server: 'JavaScript',
             quality: detectQualityFromUrl(cleanUrl)
           });
-          console.log(`✅ Found JS source: ${cleanUrl}`);
         }
       });
     }
   });
 
-  // Method 5: Data attributes
-  $$('[data-video], [data-src], [data-file], [data-url]').each((i, el) => {
-    let src = $$(el).attr('data-video') || $$(el).attr('data-src') || $$(el).attr('data-file') || $$(el).attr('data-url');
-    if (src && src.includes('http')) {
-      src = normalizeUrl(src, baseUrl);
-      if (!isBlockedSource(src)) {
-        servers.push({
-          name: `Data Source ${i + 1}`,
-          url: src,
-          type: 'direct',
-          server: 'Direct',
-          quality: detectQualityFromUrl(src)
-        });
-        console.log(`✅ Found data source: ${src}`);
-      }
-    }
-  });
-
-  // Remove duplicates
   const uniqueServers = removeDuplicateServers(servers);
-  console.log(`🎯 Extracted ${uniqueServers.length} unique servers`);
-  
   return uniqueServers;
 }
 
-// ==================== STEP 6: MAIN SEARCH FUNCTION ====================
-async function findEpisode(animeTitle, episode, provider = null) {
-  console.log(`\n🎯 STARTING SEARCH: "${animeTitle}" Episode ${episode}`);
+// ==================== MAIN SEARCH FUNCTION ====================
+async function findEpisode(animeTitle, episode, provider = null, useCache = true) {
+  console.log(`\n🎯 ENHANCED SEARCH STARTED: "${animeTitle}" Episode ${episode}`);
   
-  // Define sources with new provider names
+  const searchStartTime = Date.now();
+  
   let sources = [
-    { name: 'animeworld-india.me (Yuji)', func: tryAnimeWorldIndia, id: 'animeworldindia' },
-    { name: 'satoru.one (Gojo)', func: trySatoru, id: 'satoru' },
-    { name: 'watchanimeworld.in (Geto)', func: tryWatchAnimeWorld, id: 'watchanimeworld' },
-    { name: 'animedub.co (Luffy)', func: tryAnimedub, id: 'animedub' }
+    { 
+      name: 'satoru.one (Gojo)', 
+      func: trySatoru, 
+      id: 'satoru',
+      timeout: 15000,
+      priority: 1
+    },
+    { 
+      name: 'watchanimeworld.in (Geto)', 
+      func: tryWatchAnimeWorld, 
+      id: 'watchanimeworld',
+      timeout: 10000,
+      priority: 2
+    },
+    { 
+      name: 'toonstream.love (Luffy)', 
+      func: tryToonstream, 
+      id: 'toonstream',
+      timeout: 15000,
+      priority: 3
+    },
+    { 
+      name: 'animeworld-india.me (Yuji)', 
+      func: tryAnimeWorldIndia, 
+      id: 'animeworldindia',
+      timeout: 15000,
+      priority: 4
+    },
+    { 
+      name: 'animesalt.cc (AnimeSalt)', 
+      func: tryAnimeSalt, 
+      id: 'animesalt',
+      timeout: 15000,
+      priority: 5
+    }
   ];
   
-  // If specific provider requested, try it first
+  sources.sort((a, b) => a.priority - b.priority);
+  
   if (provider) {
-    sources = sources.filter(s => s.id === provider);
-    if (sources.length === 0) {
-      throw new Error(`Provider ${provider} not found`);
+    const providerSource = sources.find(s => s.id === provider);
+    if (!providerSource) {
+      throw new Error(`Provider ${provider} not found. Available providers: ${sources.map(s => s.id).join(', ')}`);
     }
+    sources = [providerSource];
   }
+  
+  const errors = [];
   
   for (const source of sources) {
     try {
-      console.log(`\n🔍 STEP: Trying ${source.name}...`);
-      const result = await source.func(animeTitle, episode);
+      const result = await Promise.race([
+        source.func(animeTitle, episode, useCache),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error(`Timeout after ${source.timeout}ms`)), source.timeout)
+        )
+      ]);
+      
       if (result && result.valid) {
-        console.log(`✅ SUCCESS: Found on ${source.name}`);
+        const searchTime = Date.now() - searchStartTime;
+        
+        result.searchTime = searchTime;
+        result.totalProviders = sources.length;
+        result.triedProviders = sources.indexOf(source) + 1;
+        result.cached = !!result.cached;
+        
         return result;
       }
     } catch (error) {
-      console.log(`❌ ${source.name} failed: ${error.message}`);
-      // Continue to next source
+      errors.push(`${source.name}: ${error.message}`);
+      continue;
     }
   }
   
-  throw new Error(`Episode ${episode} not found on any source`);
+  throw new Error(`Episode ${episode} of "${animeTitle}" not found on any source. Errors: ${errors.join('; ')}`);
 }
 
-// ==================== ENHANCED PLAYER WITH INSTANT LOADING ====================
+// ==================== BOSS LEVEL ADBLOCKER INTEGRATION ====================
+function getBossLevelAdBlockerScript() {
+  return `
+    (function() {
+        'use strict';
+        
+        console.log('🎯 BOSS LEVEL AdBlocker activated - Video Focused');
+        
+        let isBlocking = true;
+        let stats = {
+            totalBlocks: 0,
+            videoAds: 0
+        };
+
+        // Load stats from localStorage
+        try {
+            const savedStats = localStorage.getItem('bossLevelAdblockerStats');
+            if (savedStats) {
+                stats = JSON.parse(savedStats);
+            }
+        } catch (e) {
+            console.log('❌ Could not load saved stats');
+        }
+
+        // BOSS LEVEL: Target specific video ad patterns
+        const VIDEO_AD_SELECTORS = [
+            'video[src*="ad"]',
+            'video[src*="banner"]',
+            'video[src*="promo"]',
+            'video[src*="commercial"]',
+            'video[src*="ads"]',
+            'video.jw-video.jw-reset',
+            'video[class*="ad"]',
+            'video[id*="ad"]',
+            'video[data-ad]',
+            '.ad-video',
+            '.video-ad',
+            '.ad-container video',
+            '.ad-unit video',
+            '.adsbygoogle video'
+        ];
+
+        // Ad domains to block
+        const AD_DOMAINS = [
+            'doubleclick.net',
+            'googleadservices.com',
+            'googlesyndication.com',
+            'adsystem',
+            'advertising.com',
+            'ads.',
+            'banner',
+            'sponsor',
+            'promo',
+            'tracking'
+        ];
+
+        // Initialize the adblocker
+        function init() {
+            console.log('🛡️ BOSS LEVEL AdBlocker initializing...');
+            
+            // Start aggressive ad blocking
+            startVideoAdBlocking();
+            blockAdIframes();
+            blockAdScripts();
+            setupObservers();
+            setupEventListeners();
+            
+            console.log('✅ BOSS LEVEL AdBlocker ready - Monitoring for ads');
+        }
+
+        function startVideoAdBlocking() {
+            // Block existing video ads
+            VIDEO_AD_SELECTORS.forEach(selector => {
+                try {
+                    const videos = document.querySelectorAll(selector);
+                    videos.forEach(video => {
+                        if (isVideoAd(video)) {
+                            blockVideoAd(video);
+                        }
+                    });
+                } catch (e) {
+                    console.log('❌ Error with selector:', selector, e);
+                }
+            });
+
+            // Monitor all videos for ad behavior
+            const allVideos = document.querySelectorAll('video');
+            allVideos.forEach(video => {
+                monitorVideoForAds(video);
+            });
+        }
+
+        function isVideoAd(video) {
+            if (!video || !video.src) return false;
+            
+            const src = video.src.toLowerCase();
+            const className = video.className.toLowerCase();
+            const id = video.id.toLowerCase();
+            
+            // Check for ad indicators
+            const isAd = (
+                AD_DOMAINS.some(domain => src.includes(domain)) ||
+                src.includes('ad') ||
+                src.includes('banner') ||
+                src.includes('promo') ||
+                className.includes('ad') ||
+                id.includes('ad') ||
+                video.hasAttribute('data-ad') ||
+                video.duration < 120 // Short videos might be ads
+            );
+            
+            return isAd;
+        }
+
+        function blockVideoAd(video) {
+            if (video.classList.contains('boss-adblocker-handled')) return;
+            
+            console.log('🚫 Blocking video ad:', video.src);
+            
+            video.classList.add('boss-adblocker-handled');
+            
+            // Try to skip the ad by seeking to end
+            try {
+                if (video.duration > 0) {
+                    video.currentTime = video.duration - 1;
+                    video.pause();
+                }
+            } catch (e) {
+                // If we can't control it, remove it
+                video.remove();
+            }
+            
+            // Remove video from DOM if it's definitely an ad
+            if (isDefiniteAd(video)) {
+                setTimeout(() => {
+                    if (video.parentNode) {
+                        video.remove();
+                        console.log('🗑️ Removed video ad from DOM');
+                    }
+                }, 1000);
+            }
+            
+            // Update stats
+            stats.totalBlocks++;
+            stats.videoAds++;
+            saveStats();
+        }
+
+        function isDefiniteAd(video) {
+            const src = video.src.toLowerCase();
+            return (
+                src.includes('doubleclick') ||
+                src.includes('googleadservices') ||
+                src.includes('googlesyndication') ||
+                video.duration < 60 // Very short videos are likely ads
+            );
+        }
+
+        function monitorVideoForAds(video) {
+            if (video.classList.contains('boss-adblocker-monitored')) return;
+            
+            video.classList.add('boss-adblocker-monitored');
+            
+            let lastSrc = video.src;
+            let adCheckInterval;
+            
+            const checkForAd = () => {
+                if (!isBlocking) return;
+                
+                const currentSrc = video.src;
+                
+                // Check if source changed to an ad
+                if (currentSrc !== lastSrc) {
+                    lastSrc = currentSrc;
+                    if (isVideoAd(video)) {
+                        blockVideoAd(video);
+                        return;
+                    }
+                }
+                
+                // Check for short videos (potential ads)
+                if (video.duration > 0 && video.duration < 120) {
+                    console.log('⏱️ Short video detected (potential ad):', video.duration, 'seconds');
+                    if (isVideoAd(video)) {
+                        blockVideoAd(video);
+                    }
+                }
+                
+                // Check if video is playing but very short (likely ad)
+                if (!video.paused && video.duration < 30) {
+                    console.log('🎬 Short playing video detected - likely ad');
+                    blockVideoAd(video);
+                }
+            };
+            
+            // Start monitoring
+            adCheckInterval = setInterval(checkForAd, 2000);
+            
+            // Monitor video events
+            const events = ['loadstart', 'canplay', 'timeupdate', 'play', 'playing'];
+            events.forEach(event => {
+                video.addEventListener(event, checkForAd);
+            });
+            
+            // Clean up when video is removed
+            const observer = new MutationObserver(() => {
+                if (!document.contains(video)) {
+                    clearInterval(adCheckInterval);
+                    observer.disconnect();
+                    events.forEach(event => {
+                        video.removeEventListener(event, checkForAd);
+                    });
+                }
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+        }
+
+        function blockAdIframes() {
+            const iframes = document.querySelectorAll('iframe');
+            iframes.forEach(iframe => {
+                try {
+                    const src = iframe.src || '';
+                    if (isAdUrl(src)) {
+                        console.log('🚫 Blocking ad iframe:', src);
+                        iframe.remove();
+                        stats.totalBlocks++;
+                        saveStats();
+                    }
+                } catch (e) {
+                    // Cross-origin error, remove anyway
+                    iframe.remove();
+                }
+            });
+        }
+
+        function blockAdScripts() {
+            const scripts = document.querySelectorAll('script');
+            scripts.forEach(script => {
+                const src = script.src || '';
+                if (isAdUrl(src)) {
+                    console.log('🚫 Blocking ad script:', src);
+                    script.remove();
+                    stats.totalBlocks++;
+                    saveStats();
+                }
+            });
+        }
+
+        function isAdUrl(url) {
+            if (!url) return false;
+            url = url.toLowerCase();
+            return AD_DOMAINS.some(domain => url.includes(domain));
+        }
+
+        function setupObservers() {
+            // Observe for new elements added to DOM
+            const observer = new MutationObserver((mutations) => {
+                if (!isBlocking) return;
+                
+                mutations.forEach((mutation) => {
+                    mutation.addedNodes.forEach((node) => {
+                        if (node.nodeType === 1) {
+                            // Check videos
+                            if (node.tagName === 'VIDEO') {
+                                setTimeout(() => {
+                                    if (isVideoAd(node)) {
+                                        blockVideoAd(node);
+                                    } else {
+                                        monitorVideoForAds(node);
+                                    }
+                                }, 100);
+                            }
+                            
+                            // Check iframes
+                            if (node.tagName === 'IFRAME') {
+                                const src = node.src || '';
+                                if (isAdUrl(src)) {
+                                    node.remove();
+                                    stats.totalBlocks++;
+                                    saveStats();
+                                }
+                            }
+                            
+                            // Check scripts
+                            if (node.tagName === 'SCRIPT') {
+                                const src = node.src || '';
+                                if (isAdUrl(src)) {
+                                    node.remove();
+                                    stats.totalBlocks++;
+                                    saveStats();
+                                }
+                            }
+                            
+                            // Check nested elements
+                            if (node.querySelectorAll) {
+                                // Videos
+                                node.querySelectorAll('video').forEach(video => {
+                                    setTimeout(() => {
+                                        if (isVideoAd(video)) {
+                                            blockVideoAd(video);
+                                        } else {
+                                            monitorVideoForAds(video);
+                                        }
+                                    }, 100);
+                                });
+                                
+                                // Iframes
+                                node.querySelectorAll('iframe').forEach(iframe => {
+                                    const src = iframe.src || '';
+                                    if (isAdUrl(src)) {
+                                        iframe.remove();
+                                        stats.totalBlocks++;
+                                        saveStats();
+                                    }
+                                });
+                            }
+                        }
+                    });
+                });
+            });
+            
+            observer.observe(document.body, {
+                childList: true,
+                subtree: true
+            });
+        }
+
+        function setupEventListeners() {
+            // Listen for messages (if you want to add controls later)
+            window.addEventListener('message', (event) => {
+                if (event.data && event.data.type === 'BOSS_ADBLOCKER_TOGGLE') {
+                    isBlocking = event.data.enabled;
+                    console.log(isBlocking ? '✅ AdBlocker enabled' : '⏸️ AdBlocker paused');
+                }
+            });
+            
+            // Expose controls to window for debugging
+            window.bossAdblocker = {
+                toggle: (enabled) => {
+                    isBlocking = enabled;
+                    return isBlocking;
+                },
+                getStats: () => stats,
+                forceBlock: () => {
+                    startVideoAdBlocking();
+                    blockAdIframes();
+                    blockAdScripts();
+                },
+                debug: () => {
+                    const allVideos = document.querySelectorAll('video');
+                    const monitored = document.querySelectorAll('.boss-adblocker-monitored');
+                    const blocked = document.querySelectorAll('.boss-adblocker-handled');
+                    
+                    console.log('=== BOSS LEVEL ADBLOCKER DEBUG ===');
+                    console.log('Blocking:', isBlocking);
+                    console.log('Total videos:', allVideos.length);
+                    console.log('Monitored videos:', monitored.length);
+                    console.log('Blocked videos:', blocked.length);
+                    console.log('Total blocks:', stats.totalBlocks);
+                    console.log('Video ads blocked:', stats.videoAds);
+                    
+                    allVideos.forEach((video, index) => {
+                        console.log(\`Video \${index + 1}:\`, {
+                            src: video.src ? video.src.substring(0, 50) + '...' : 'no-src',
+                            duration: video.duration,
+                            class: video.className,
+                            monitored: video.classList.contains('boss-adblocker-monitored'),
+                            blocked: video.classList.contains('boss-adblocker-handled')
+                        });
+                    });
+                }
+            };
+        }
+
+        function saveStats() {
+            try {
+                localStorage.setItem('bossLevelAdblockerStats', JSON.stringify(stats));
+            } catch (e) {
+                console.log('❌ Could not save stats');
+            }
+        }
+
+        // Auto-skip ads in iframes (for embedded players)
+        function setupIframeAdSkipping() {
+            setInterval(() => {
+                const iframes = document.querySelectorAll('iframe');
+                iframes.forEach(iframe => {
+                    try {
+                        // Try to skip ads in iframes by sending skip commands
+                        iframe.contentWindow?.postMessage({
+                            type: 'SKIP_AD',
+                            timestamp: Date.now()
+                        }, '*');
+                    } catch (e) {
+                        // Cross-origin error, ignore
+                    }
+                });
+            }, 3000);
+        }
+
+        // Initialize when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            init();
+        }
+        
+        // Also start iframe ad skipping
+        setTimeout(setupIframeAdSkipping, 5000);
+
+        console.log('🎯 BOSS LEVEL AdBlocker loaded successfully');
+
+    })();
+    `;
+}
+
+// ==================== ENHANCED PLAYER WITH BOSS LEVEL AD BLOCKING ====================
 function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], currentProvider = 'unknown', anilistId = null) {
   const html = `<!DOCTYPE html>
 <html>
@@ -769,74 +1437,6 @@ function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], current
             border-color: #4ecdc4;
         }
         
-        /* Provider overlay */
-        .provider-overlay {
-            position: fixed;
-            top: 60px;
-            right: 20px;
-            background: rgba(0,0,0,0.9);
-            color: white;
-            padding: 15px;
-            border-radius: 10px;
-            z-index: 1000;
-            border: 1px solid rgba(255,255,255,0.2);
-            backdrop-filter: blur(10px);
-            max-width: 250px;
-            display: none;
-        }
-        
-        .provider-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-        }
-        
-        .provider-title {
-            font-weight: bold;
-            color: #4ecdc4;
-        }
-        
-        .close-btn {
-            background: none;
-            border: none;
-            color: white;
-            font-size: 18px;
-            cursor: pointer;
-            padding: 5px;
-        }
-        
-        .provider-list {
-            max-height: 200px;
-            overflow-y: auto;
-        }
-        
-        .provider-item {
-            padding: 8px 12px;
-            margin: 5px 0;
-            background: rgba(255,255,255,0.1);
-            border-radius: 5px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            border: 1px solid transparent;
-        }
-        
-        .provider-item:hover {
-            background: rgba(255,255,255,0.2);
-            border-color: #4ecdc4;
-        }
-        
-        .provider-item.active {
-            background: rgba(78, 205, 196, 0.3);
-            border-color: #4ecdc4;
-        }
-        
-        .provider-name {
-            font-weight: 500;
-        }
-        
         /* Server overlay */
         .server-overlay {
             position: fixed;
@@ -925,48 +1525,52 @@ function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], current
             font-size: 0.9rem;
             margin-top: 10px;
         }
+
+        /* Ad-block notification */
+        .ad-block-notice {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.9);
+            color: #4ecdc4;
+            padding: 8px 12px;
+            border-radius: 5px;
+            font-size: 12px;
+            z-index: 999;
+            border: 1px solid #4ecdc4;
+            backdrop-filter: blur(10px);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        /* Styles for blocked elements */
+        .boss-adblocker-handled {
+            opacity: 0.3 !important;
+            pointer-events: none !important;
+        }
     </style>
 </head>
 <body>
-    <!-- Loading Screen - SHOWN INSTANTLY -->
+    <!-- Loading Screen -->
     <div class="loading-screen" id="loadingScreen">
         <div class="spinner"></div>
-        <div class="loading-text">Loading Video...</div>
+        <div class="loading-text">Loading Video Player...</div>
         <div class="loading-provider" id="loadingProvider">Provider: ${PROVIDERS.find(p => p.id === currentProvider)?.name || 'Auto'}</div>
     </div>
 
-    <!-- Player Container - HIDDEN INITIALLY -->
+    <!-- Player Container -->
     <div class="player-container hidden" id="playerContainer">
         <div class="source-info">
             ${title} | Episode ${episode}
         </div>
         
         <div class="control-buttons">
-            <button class="control-btn" onclick="toggleProviderOverlay()">
-                📺 Providers
-            </button>
             <button class="control-btn" onclick="toggleServerOverlay()">
                 🔄 Servers (${servers.length})
             </button>
-        </div>
-        
-        <!-- Provider Overlay -->
-        <div class="provider-overlay" id="providerOverlay">
-            <div class="provider-header">
-                <div class="provider-title">Switch Provider</div>
-                <button class="close-btn" onclick="toggleProviderOverlay()">×</button>
-            </div>
-            <div class="provider-list" id="providerList">
-                ${PROVIDERS.map(provider => `
-                    <div class="provider-item ${provider.id === currentProvider ? 'active' : ''}" 
-                         onclick="switchProvider('${provider.id}', this)">
-                        <div class="provider-name">${provider.name}</div>
-                    </div>
-                `).join('')}
-                <div class="provider-item" onclick="switchProvider('auto', this)">
-                    <div class="provider-name">🔄 Auto (All Providers)</div>
-                </div>
-            </div>
+            <button class="control-btn" onclick="toggleFullscreen()">
+                ⛶ Fullscreen
+            </button>
         </div>
         
         <!-- Server Overlay -->
@@ -978,140 +1582,124 @@ function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], current
             <div class="server-list" id="serverList">
                 ${servers.map((server, index) => `
                     <div class="server-item ${index === 0 ? 'active' : ''}" 
-                         onclick="switchServer('${server.url}', this)">
+                         onclick="switchServer('${server.url}', '${server.type}', this)">
                         <div class="server-name">${server.name}</div>
-                        <div class="server-type">${server.server}</div>
+                        <div class="server-type">${server.server} • ${server.quality}</div>
                     </div>
                 `).join('')}
             </div>
         </div>
 
+        <!-- Ad-block notification -->
+        <div class="ad-block-notice" id="adBlockNotice">
+            🛡️ BOSS LEVEL Ad Blocker Active - Video Safe Mode
+        </div>
+
         <iframe 
             id="videoFrame"
             src="${videoUrl}" 
-            allow="autoplay; full-screen; encrypted-media" 
+            allow="autoplay; fullscreen; encrypted-media; picture-in-picture" 
             allowfullscreen
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
             loading="eager"
+            referrerpolicy="no-referrer-when-downgrade"
             onload="hideLoadingScreen()">
         </iframe>
     </div>
 
     <script>
+        ${getBossLevelAdBlockerScript()}
+
+        // ==================== PLAYER FUNCTIONALITY ====================
         const loadingScreen = document.getElementById('loadingScreen');
         const playerContainer = document.getElementById('playerContainer');
-        const videoFrame = document.getElementById('videoFrame');
-        const loadingProvider = document.getElementById('loadingProvider');
-        
         let currentServer = '${videoUrl}';
-        let currentProvider = '${currentProvider}';
-        const anilistId = '${anilistId}';
-        const episode = ${episode};
+        let currentServerType = 'iframe';
         
-        // Hide loading screen when video loads
         function hideLoadingScreen() {
-            console.log('✅ Video loaded, hiding loading screen');
+            console.log('✅ Video frame loaded');
             loadingScreen.classList.add('hidden');
             playerContainer.classList.remove('hidden');
         }
         
-        // Fallback - hide loading after 5 seconds if video doesn't load
+        // Fallback in case loading stalls
         setTimeout(() => {
             if (!loadingScreen.classList.contains('hidden')) {
-                console.log('🔄 Fallback: Hiding loading screen');
+                console.log('🔄 Force showing player');
                 loadingScreen.classList.add('hidden');
                 playerContainer.classList.remove('hidden');
             }
-        }, 5000);
-        
-        // Overlay functions
-        function toggleProviderOverlay() {
-            const overlay = document.getElementById('providerOverlay');
-            const serverOverlay = document.getElementById('serverOverlay');
-            serverOverlay.style.display = 'none';
-            overlay.style.display = overlay.style.display === 'none' ? 'block' : 'none';
-        }
+        }, 8000);
         
         function toggleServerOverlay() {
             const overlay = document.getElementById('serverOverlay');
-            const providerOverlay = document.getElementById('providerOverlay');
-            providerOverlay.style.display = 'none';
             overlay.style.display = overlay.style.display === 'none' ? 'block' : 'none';
         }
         
-        // Server switching
-        function switchServer(url, element) {
+        function switchServer(url, type, element) {
             if (url === currentServer) return;
             
-            // Show loading screen when switching servers
+            console.log('🔄 Switching to server:', url);
             loadingScreen.classList.remove('hidden');
             playerContainer.classList.add('hidden');
             
-            // Update active server
+            // Update active server UI
             document.querySelectorAll('.server-item').forEach(item => {
                 item.classList.remove('active');
             });
             element.classList.add('active');
             
-            // Switch iframe source
-            document.getElementById('videoFrame').src = url;
+            // Update iframe source
+            const videoFrame = document.getElementById('videoFrame');
             currentServer = url;
+            currentServerType = type;
             
-            // The onload event will hide the loading screen
+            videoFrame.src = url;
+            toggleServerOverlay();
         }
         
-        // Provider switching
-        function switchProvider(providerId, element) {
-            if (providerId === currentProvider) return;
-            
-            console.log('🔄 Switching to provider:', providerId);
-            
-            // Show loading screen
-            loadingScreen.classList.remove('hidden');
-            playerContainer.classList.add('hidden');
-            
-            // Update loading text
-            const providerName = providerId === 'auto' ? 'Auto (All Providers)' : 
-                ${JSON.stringify(PROVIDERS)}.find(p => p.id === providerId)?.name || providerId;
-            loadingProvider.textContent = 'Provider: ' + providerName;
-            
-            // Close overlay
-            toggleProviderOverlay();
-            
-            // Reload with new provider
-            const url = \`/api/anime/\${anilistId}/\${episode}?provider=\${providerId}\`;
-            window.location.href = url;
-        }
-        
-        // Auto-hide overlays after 6 seconds
-        setTimeout(() => {
-            const providerOverlay = document.getElementById('providerOverlay');
-            const serverOverlay = document.getElementById('serverOverlay');
-            if (providerOverlay.style.display !== 'none') {
-                providerOverlay.style.display = 'none';
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(err => {
+                    console.log('Fullscreen error:', err);
+                });
+            } else {
+                document.exitFullscreen();
             }
-            if (serverOverlay.style.display !== 'none') {
-                serverOverlay.style.display = 'none';
+        }
+        
+        // Auto-hide overlays
+        setTimeout(() => {
+            const overlay = document.getElementById('serverOverlay');
+            if (overlay.style.display !== 'none') {
+                overlay.style.display = 'none';
             }
         }, 6000);
         
-        // Hide source info after 3 seconds
-        setTimeout(() => {
-            document.querySelector('.source-info').style.opacity = '0.5';
-        }, 3000);
-        
-        // Keyboard shortcuts
+        // Keyboard controls
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'p' || e.key === 'P') {
-                toggleProviderOverlay();
+            if (e.key === 's' || e.key === 'S') toggleServerOverlay();
+            if (e.key === 'f' || e.key === 'F') toggleFullscreen();
+            if (e.key === 'Escape') {
+                document.getElementById('serverOverlay').style.display = 'none';
             }
-            if (e.key === 's' || e.key === 'S') {
-                toggleServerOverlay();
+        });
+        
+        // Click outside to close overlay
+        document.addEventListener('click', (e) => {
+            const overlay = document.getElementById('serverOverlay');
+            if (!overlay.contains(e.target) && !e.target.classList.contains('control-btn')) {
+                overlay.style.display = 'none';
             }
         });
     </script>
 </body>
 </html>`;
+  
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
   res.send(html);
 }
 
@@ -1155,11 +1743,13 @@ app.get('/api/anime/:anilistId/:episode', async (req, res) => {
         provider: episodeData.provider,
         servers: episodeData.servers,
         total_servers: episodeData.servers.length,
-        response_time: `${responseTime}ms`
+        response_time: `${responseTime}ms`,
+        search_time: episodeData.searchTime,
+        cached: episodeData.cached || false
       });
     }
 
-    // Send enhanced player with provider & server switching
+    // Send enhanced player with BOSS LEVEL ad blocking
     return sendEnhancedPlayer(res, titleData.primary, episode, 
                             episodeData.url, episodeData.servers, 
                             episodeData.provider, anilistId);
@@ -1173,7 +1763,7 @@ app.get('/api/anime/:anilistId/:episode', async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
     
-    // Send error page with loading screen
+    // Send error page
     const errorHtml = `<!DOCTYPE html>
 <html>
 <head>
@@ -1222,6 +1812,47 @@ app.get('/api/anime/:anilistId/:episode', async (req, res) => {
   }
 });
 
+// ==================== CACHE MANAGEMENT ENDPOINTS ====================
+app.post('/clear-cache', (req, res) => {
+  const { key } = req.body;
+  if (key && searchCache.has(key)) {
+    searchCache.delete(key);
+    res.json({ success: true, message: `Cache cleared for key: ${key}` });
+  } else {
+    res.json({ success: false, message: 'Cache key not found' });
+  }
+});
+
+app.post('/clear-all-cache', (req, res) => {
+  const previousSize = searchCache.size;
+  searchCache.clear();
+  res.json({ 
+    success: true, 
+    message: `Cleared all cache (${previousSize} items)` 
+  });
+});
+
+app.get('/cache-stats', (req, res) => {
+  const now = Date.now();
+  let validEntries = 0;
+  let expiredEntries = 0;
+  
+  searchCache.forEach((value, key) => {
+    if (value.expiry > now) {
+      validEntries++;
+    } else {
+      expiredEntries++;
+    }
+  });
+  
+  res.json({
+    total: searchCache.size,
+    valid: validEntries,
+    expired: expiredEntries,
+    hitRate: 'N/A'
+  });
+});
+
 // Health endpoint
 app.get('/health', (req, res) => {
   res.json({
@@ -1231,36 +1862,47 @@ app.get('/health', (req, res) => {
     failed_requests: apiStats.failedRequests,
     success_rate: apiStats.totalRequests > 0 ? 
       Math.round((apiStats.successfulRequests / apiStats.totalRequests) * 100) + '%' : '0%',
-    providers: PROVIDERS.map(p => ({ id: p.id, name: p.name }))
+    providers: PROVIDERS.map(p => ({ id: p.id, name: p.name, enabled: p.enabled })),
+    cache_size: searchCache.size,
+    uptime: process.uptime().toFixed(2) + 's'
   });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`
-🎯 ANIME STREAMING API - PROVIDER SWITCHING
-──────────────────────────────────────────
+🎯 ULTIMATE ANIME STREAMING API - BOSS LEVEL AD BLOCKING
+─────────────────────────────────────────────────────
 Port: ${PORT}
 API: http://localhost:${PORT}
 
-🔄 PROVIDERS:
-• Yuji (animeworld-india.me) - SEARCH FIRST
-• Gojo (satoru.one) - AJAX WORKING
-• Geto (watchanimeworld.in) - SINGLE URL
-• Luffy (animedub.co) - DIRECT EXTRACTION
+🔄 ENHANCED PROVIDERS:
+• Gojo (satoru.one) - Priority 1
+• Geto (watchanimeworld.in) - Priority 2  
+• Luffy (toonstream.love) - Priority 3
+• Yuji (animeworld-india.me) - Priority 4
+• AnimeSalt (animesalt.cc) - Priority 5
+
+🛡️ BOSS LEVEL AD BLOCKING:
+• Advanced video ad detection
+• Auto-skip video ads
+• Block ad iframes & scripts
+• Real-time DOM monitoring
+• Video-focused protection
+• Stats tracking
 
 🎮 CONTROLS:
-• Press 'P' - Switch providers
 • Press 'S' - Switch servers
+• Press 'F' - Toggle fullscreen
+• Press 'ESC' - Close overlays
 
-⚡ IMPROVEMENTS:
-• Search-first approach for AnimeWorld India
-• Single URL patterns (no multiple attempts)
-• Direct server extraction (no AJAX for animedub)
-• Only shows actual servers found
-• Increased timeouts for reliability
+⚡ PERFORMANCE:
+• Smart caching system
+• Multi-provider fallback
+• Fast timeouts
+• Memory optimized
 
-✅ READY: All providers working with latest fixes!
-──────────────────────────────────────────
+✅ READY: Ad-free streaming with BOSS LEVEL protection!
+─────────────────────────────────────────────────────
   `);
 });

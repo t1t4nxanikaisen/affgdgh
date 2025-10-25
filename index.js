@@ -932,6 +932,7 @@ function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], current
     <div class="loading-screen" id="loadingScreen">
         <div class="spinner"></div>
         <div class="loading-text">Loading Video...</div>
+        <div class="loading-provider" id="loadingProvider">Provider: ${PROVIDERS.find(p => p.id === currentProvider)?.name || 'Auto'}</div>
     </div>
 
     <!-- Player Container - HIDDEN INITIALLY -->
@@ -942,10 +943,30 @@ function sendEnhancedPlayer(res, title, episode, videoUrl, servers = [], current
         
         <div class="control-buttons">
             <button class="control-btn" onclick="toggleProviderOverlay()">
+                📺 Providers
             </button>
             <button class="control-btn" onclick="toggleServerOverlay()">
                 🔄 Servers (${servers.length})
             </button>
+        </div>
+        
+        <!-- Provider Overlay -->
+        <div class="provider-overlay" id="providerOverlay">
+            <div class="provider-header">
+                <div class="provider-title">Switch Provider</div>
+                <button class="close-btn" onclick="toggleProviderOverlay()">×</button>
+            </div>
+            <div class="provider-list" id="providerList">
+                ${PROVIDERS.map(provider => `
+                    <div class="provider-item ${provider.id === currentProvider ? 'active' : ''}" 
+                         onclick="switchProvider('${provider.id}', this)">
+                        <div class="provider-name">${provider.name}</div>
+                    </div>
+                `).join('')}
+                <div class="provider-item" onclick="switchProvider('auto', this)">
+                    <div class="provider-name">🔄 Auto (All Providers)</div>
+                </div>
+            </div>
         </div>
         
         <!-- Server Overlay -->

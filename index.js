@@ -219,7 +219,171 @@ async function getAnimeTitleFromAniList(anilistId) {
   }
 }
 
-// ==================== PROVIDER FUNCTIONS (keeping existing ones) ====================
+async function tryToonstream(animeTitle, episode, useCache = true) {
+  const cacheKey = `toonstream:${animeTitle}:${episode}`;
+  
+  if (useCache) {
+    const cached = getCache(cacheKey);
+    if (cached) return cached;
+  }
+
+  try {
+    console.log(`🔍 [Toonstream] Enhanced search: ${animeTitle} Episode ${episode}`);
+    
+    // Multiple search approaches
+    const searchTerms = [
+      animeTitle,
+      animeTitle.toLowerCase(),
+      animeTitle.replace(/[^\w\s]/g, ' ').trim(),
+      animeTitle.replace(/season \d+/i, '').trim()
+    ];
+
+    let animeUrl = null;
+
+    for (const searchTerm of searchTerms) {
+      try {
+        const searchUrl = `https://toonstream.love/?s=${encodeURIComponent(searchTerm)}`;
+        console.log(`🔗 Search attempt: "${searchTerm}" -> ${searchUrl}`);
+        
+        const searchResponse = await axios.get(searchUrl, {
+          headers: getEnhancedHeaders('https://toonstream.love'),
+          timeout: 10000
+        });
+
+        const $ = load(searchResponse.data);
+        
+        // Multiple selector patterns
+        const selectors = [
+          '.film_list-wrap .film-detail',
+          '.flw-item',
+          '[href*="/series/"]',
+          '.film-poster-ahref',
+          '.movie-item'
+        ];
+
+        for (const selector of selectors) {
+          $(selector).each((i, el) => {
+            const name = $(el).find('.film-name, .dynamic-name, .film-title, h3, h4, .name').text().trim().toLowerCase();
+            let url = $(el).attr('href');
+            
+            if (name && url && name.includes(animeTitle.toLowerCase())) {
+              if (url && !url.startsWith('http')) {
+                url = `https://toonstream.love${url.startsWith('/') ? url : '/' + url}`;
+              }
+              if (url && url.includes('/series/')) {
+                animeUrl = url;
+                console.log(`✅ Found match: "${$(el).find('.film-name, .dynamic-name').text().trim()}" -> ${animeUrl}`);
+                return false;
+              }
+            }
+          });
+          if (animeUrl) break;
+        }
+        if (animeUrl) break;
+      } catch (searchError) {
+        console.log(`⚠️ Search term failed: ${searchError.message}`);
+        continue;
+      }
+    }
+
+    if (!animeUrl) {
+      // Try direct URL construction as last resort
+      const cleanSlug = animeTitle.toLowerCase()
+        .replace(/[^\w\s]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-');
+      
+      const directUrl = `https://toonstream.love/series/${cleanSlug}/`;
+      console.log(`🔄 Trying direct URL: ${directUrl}`);
+      
+      try {
+        const directResponse = await axios.get(directUrl, {
+          headers: getEnhancedHeaders('https://toonstream.love'),
+          timeout: 5000,
+          validateStatus: null
+        });
+        
+        if (directResponse.status === 200) {
+          animeUrl = directUrl;
+          console.log(`✅ Direct URL worked: ${animeUrl}`);
+        }
+      } catch (directError) {
+        console.log(`❌ Direct URL failed: ${directError.message}`);
+      }
+    }
+
+    if (!animeUrl) throw new Error('Anime not found in search results');
+
+    // Extract series slug and build episode URL
+    const seriesMatch = animeUrl.match(/\/series\/([^\/]+)/);
+    if (!seriesMatch) throw new Error('Could not extract series slug');
+    
+    const seriesSlug = seriesMatch[1].replace(/\/$/, '');
+    console.log(`🎯 Series Slug: ${seriesSlug}`);
+
+    // Try multiple episode URL formats
+    const episodeUrlFormats = [
+      `https://toonstream.love/episode/${seriesSlug}-1x${episode}/`,
+      `https://toonstream.love/episode/${seriesSlug}-episode-${episode}/`,
+      `https://toonstream.love/episode/${seriesSlug}-ep-${episode}/`
+    ];
+
+    let episodeData = null;
+
+    for (const episodeUrl of episodeUrlFormats) {
+      try {
+        console.log(`🔗 Trying episode URL: ${episodeUrl}`);
+        
+        const episodeResponse = await axios.get(episodeUrl, {
+          headers: getEnhancedHeaders(animeUrl),
+          timeout: 8000,
+          validateStatus: null
+        });
+
+        if (episodeResponse.status === 200) {
+          const $$ = load(episodeResponse.data);
+          
+          // Check if page is valid (not 404)
+          const pageTitle = $$('title').text();
+          if (pageTitle.includes('404') || pageTitle.includes('Not Found')) {
+            continue;
+          }
+
+          const servers = await extractEnhancedToonstreamServers($$, episodeUrl);
+          if (servers.length > 0) {
+            episodeData = {
+              url: servers[0].url,
+              servers: servers,
+              source: 'toonstream.love',
+              provider: 'toonstream',
+              episode: episode,
+              valid: true,
+              cached: false
+            };
+            console.log(`✅ Found ${servers.length} servers on toonstream.love`);
+            break;
+          }
+        }
+      } catch (episodeError) {
+        console.log(`⚠️ Episode URL failed: ${episodeError.message}`);
+        continue;
+      }
+    }
+
+    if (!episodeData) {
+      throw new Error('No episode data found - episode may not exist on this provider');
+    }
+
+    setCache(cacheKey, episodeData);
+    return episodeData;
+
+  } catch (err) {
+    console.error(`💥 toonstream.love error: ${err.message}`);
+    throw err;
+  }
+}
+
+// ==================== OTHER PROVIDER FUNCTIONS ====================
 async function tryAnimeSalt(animeTitle, episode, useCache = true) {
   const cacheKey = `animesalt:${animeTitle}:${episode}`;
   
@@ -393,130 +557,6 @@ function extractAnimeSaltServers($, baseUrl) {
   return uniqueServers;
 }
 
-// ==================== OTHER PROVIDER FUNCTIONS (simplified for brevity) ====================
-async function tryToonstream(animeTitle, episode, useCache = true) {
-  const cacheKey = `toonstream:${animeTitle}:${episode}`;
-  if (useCache) {
-    const cached = getCache(cacheKey);
-    if (cached) return cached;
-  }
-
-  try {
-    const searchUrl = `https://toonstream.love/?s=${encodeURIComponent(animeTitle)}`;
-    const searchResponse = await axios.get(searchUrl, {
-      headers: getEnhancedHeaders('https://toonstream.love'),
-      timeout: 8000
-    });
-
-    const $ = load(searchResponse.data);
-    
-    let animeUrl = null;
-    let bestMatch = null;
-
-    $('.film_list-wrap .film-detail, .flw-item, [href*="/series/"]').each((i, el) => {
-      const name = $(el).find('.film-name, .dynamic-name, .film-title, h3, h4').text().trim() || $(el).text().trim();
-      let url = $(el).attr('href') || $(el).find('a').attr('href');
-      
-      if (name && url && name.toLowerCase().includes(animeTitle.toLowerCase())) {
-        if (url && !url.startsWith('http')) {
-          url = `https://toonstream.love${url.startsWith('/') ? url : '/' + url}`;
-        }
-        if (url && url.includes('/series/')) {
-          animeUrl = url;
-          bestMatch = name;
-          return false;
-        }
-      }
-    });
-
-    if (!animeUrl) throw new Error('Anime not found in search results');
-
-    const seriesMatch = animeUrl.match(/\/series\/([^\/]+)/);
-    if (!seriesMatch) throw new Error('Could not extract series slug');
-    
-    const seriesSlug = seriesMatch[1].replace(/\/$/, '');
-    const episodeUrl = `https://toonstream.love/episode/${seriesSlug}-1x${episode}/`;
-    
-    const episodeResponse = await axios.get(episodeUrl, {
-      headers: getEnhancedHeaders(animeUrl),
-      timeout: 8000,
-      validateStatus: null
-    });
-
-    if (episodeResponse.status !== 200) {
-      throw new Error('Episode page not found');
-    }
-
-    const $$ = load(episodeResponse.data);
-    const servers = await extractEnhancedToonstreamServers($$, episodeUrl);
-    
-    if (servers.length === 0) {
-      throw new Error('No servers found');
-    }
-
-    const episodeData = {
-      url: servers[0].url,
-      servers: servers,
-      source: 'toonstream.love',
-      provider: 'toonstream',
-      episode: episode,
-      valid: true,
-      cached: false
-    };
-
-    setCache(cacheKey, episodeData);
-    return episodeData;
-
-  } catch (err) {
-    console.error(`💥 toonstream.love error: ${err.message}`);
-    throw err;
-  }
-}
-
-async function extractEnhancedToonstreamServers($$, baseUrl) {
-  const servers = [];
-  
-  $$('iframe').each((i, el) => {
-    let src = $$(el).attr('src') || $$(el).attr('data-src') || $$(el).attr('data-lazy-src');
-    if (src) {
-      src = normalizeUrl(src, baseUrl);
-      if (src && src.startsWith('http') && !isBlockedSource(src)) {
-        const serverType = detectServerType(src);
-        servers.push({
-          name: `Server ${i + 1} (${serverType})`,
-          url: src,
-          type: 'iframe',
-          server: serverType,
-          quality: detectQualityFromUrl(src),
-          priority: i
-        });
-      }
-    }
-  });
-
-  $$('video source, video[src]').each((i, el) => {
-    let src = $$(el).attr('src') || $$(el).attr('data-src');
-    if (src) {
-      src = normalizeUrl(src, baseUrl);
-      if (src && src.startsWith('http') && !isBlockedSource(src)) {
-        servers.push({
-          name: `Direct Stream ${i + 1}`,
-          url: src,
-          type: 'direct',
-          server: 'Direct',
-          quality: detectQualityFromUrl(src),
-          priority: 10 + i
-        });
-      }
-    }
-  });
-
-  const uniqueServers = removeDuplicateServers(servers);
-  uniqueServers.sort((a, b) => a.priority - b.priority);
-  
-  return uniqueServers;
-}
-
 async function tryAnimeWorldIndia(animeTitle, episode, useCache = true) {
   const cacheKey = `animeworldindia:${animeTitle}:${episode}`;
   if (useCache) {
@@ -606,7 +646,7 @@ async function tryWatchAnimeWorld(animeTitle, episode, useCache = true) {
       }
     }
     
-    throw new Error('Not found on watchanimeworld.in');
+    throw new Error('Not found');
   } catch (err) {
     console.error(`💥 watchanimeworld.in error: ${err.message}`);
     throw err;
@@ -834,7 +874,7 @@ function extractServersDirectly($$, baseUrl) {
   return uniqueServers;
 }
 
-// ==================== MAIN SEARCH FUNCTION ====================
+// ==================== IMPROVED MAIN SEARCH FUNCTION ====================
 async function findEpisode(animeTitle, episode, provider = null, useCache = true) {
   console.log(`\n🎯 ENHANCED SEARCH STARTED: "${animeTitle}" Episode ${episode}`);
   
@@ -880,18 +920,29 @@ async function findEpisode(animeTitle, episode, provider = null, useCache = true
   
   sources.sort((a, b) => a.priority - b.priority);
   
+  // If specific provider is requested, try it first but fallback to others
+  let preferredProvider = null;
   if (provider) {
-    const providerSource = sources.find(s => s.id === provider);
-    if (!providerSource) {
+    preferredProvider = sources.find(s => s.id === provider);
+    if (!preferredProvider) {
       throw new Error(`Provider ${provider} not found. Available providers: ${sources.map(s => s.id).join(', ')}`);
     }
-    sources = [providerSource];
+    console.log(`🎯 Using preferred provider: ${preferredProvider.name}`);
+    // Move preferred provider to front
+    sources = [preferredProvider, ...sources.filter(s => s.id !== provider)];
   }
   
   const errors = [];
   
   for (const source of sources) {
+    // Skip if we already found a result from preferred provider
+    if (preferredProvider && source.id !== preferredProvider.id && errors.length === 0) {
+      continue;
+    }
+    
     try {
+      console.log(`\n🔍 [${source.name}] Searching...`);
+      
       const result = await Promise.race([
         source.func(animeTitle, episode, useCache),
         new Promise((_, reject) => 
@@ -901,6 +952,7 @@ async function findEpisode(animeTitle, episode, provider = null, useCache = true
       
       if (result && result.valid) {
         const searchTime = Date.now() - searchStartTime;
+        console.log(`✅ SUCCESS: Found on ${source.name} in ${searchTime}ms`);
         
         result.searchTime = searchTime;
         result.totalProviders = sources.length;
@@ -910,10 +962,20 @@ async function findEpisode(animeTitle, episode, provider = null, useCache = true
         return result;
       }
     } catch (error) {
-      errors.push(`${source.name}: ${error.message}`);
-      continue;
+      const errorMsg = `${source.name}: ${error.message}`;
+      console.log(`❌ ${errorMsg}`);
+      errors.push(errorMsg);
+      
+      // If preferred provider fails, continue to other providers
+      if (preferredProvider && source.id === preferredProvider.id) {
+        console.log(`🔄 Preferred provider failed, trying others...`);
+        continue;
+      }
     }
   }
+  
+  const totalTime = Date.now() - searchStartTime;
+  console.log(`💥 All providers failed in ${totalTime}ms`);
   
   throw new Error(`Episode ${episode} of "${animeTitle}" not found on any source. Errors: ${errors.join('; ')}`);
 }
